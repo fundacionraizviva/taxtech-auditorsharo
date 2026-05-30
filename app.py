@@ -2,6 +2,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import io
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 # Configuración inicial de la página de Streamlit
 st.set_page_config(
@@ -48,6 +51,30 @@ TASA_INFOTEP = 0.0100
 TASA_SFS_EMPLEADO = 0.0304
 TASA_AFP_EMPLEADO = 0.0287
 COSTO_PER_CAPITA_2026 = 1691.38
+
+# --- ESTILOS COMPARTIDOS PARA EXPORTACIÓN EXCEL ---
+FILL_HEADER = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
+FILL_ZEBRA = PatternFill(start_color="F2F5F9", end_color="F2F5F9", fill_type="solid")
+FILL_TOTAL = PatternFill(start_color="DCE6F1", end_color="DCE6F1", fill_type="solid")
+FONT_TITLE = Font(name="Calibri", size=14, bold=True, color="1F497D")
+FONT_HEADER = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+FONT_BODY = Font(name="Calibri", size=11, bold=False)
+FONT_BOLD = Font(name="Calibri", size=11, bold=True)
+BORDER_THIN = Side(border_style="thin", color="D9D9D9")
+CELL_BORDER = Border(left=BORDER_THIN, right=BORDER_THIN, top=BORDER_THIN, bottom=BORDER_THIN)
+
+def aplicar_estilos_base(ws, titulo, subtitulo):
+    ws.views.sheetView[0].showGridLines = True
+    ws["B2"] = titulo
+    ws["B2"].font = FONT_TITLE
+    ws["B3"] = subtitulo
+    ws["B3"].font = Font(name="Calibri", size=11, italic=True)
+
+def autoajustar_columnas(ws):
+    for col in ws.columns:
+        col_letter = get_column_letter(col[0].column)
+        if col_letter != 'A':
+            ws.column_dimensions[col_letter].width = 30 if col_letter in ['E', 'F'] else 50
 
 # ==========================================
 # 2. FUNCIONES DE LÓGICA DE NEGOCIO Y AUDITORÍA
@@ -131,7 +158,7 @@ def analizar_balanza(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 # ==========================================
-# 3. INTERFAZ DE USUARIO (INTEGRACIÓN COMPLETA UI)
+# 3. INTERFAZ DE USUARIO PRINCIPAL
 # ==========================================
 
 # --- BARRA LATERAL ---
@@ -147,7 +174,6 @@ tasa_referencia = 0.01 if tipo_entidad == "Comercial / Servicios" else 0.005
 porcentaje_mp = st.sidebar.slider("Porcentaje de Materialidad", 0.5, 3.0, tasa_referencia * 100, step=0.1) / 100
 porcentaje_me = st.sidebar.slider("Porcentaje de Materialidad de Ejecución (ME)", 50, 75, 75, step=5) / 100
 
-# --- CUERPO PRINCIPAL ---
 st.title("📊 TaxTech Auditor - Análisis de Balanza & Riesgo Fiscal")
 st.header("1. Carga de Balanza de Comprobación Base")
 
@@ -169,7 +195,6 @@ if uploaded_file is not None:
         st.markdown("---")
         st.subheader(f"📌 Informe de Auditoría Analítica: {empresa} — Período: {periodo}")
         
-        # Módulo de KPIs Generales
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Total Ingresos Declarados", f"RD$ {total_ingresos:,.2f}")
         c2.metric("Total Activos Registrados", f"RD$ {total_activos:,.2f}")
@@ -206,15 +231,12 @@ if uploaded_file is not None:
                 
         with tab4:
             st.markdown("### 📋 Mapeo y Cruce Avanzado - Formulario Anual IR-2")
-            with st.expander("📥 CARGAR ARCHIVO AUXILIAR DE ANEXOS IR-2 (DGII)", expanded=False):
-                uploaded_anexos = st.file_uploader("Subir borrador de anexos (A, B, C, D) en Excel", type=["xlsx"], key="ir2_anexos")
             df_ir2 = df_balanza.groupby('casilla_ir2')['saldo_final'].sum().reset_index()
             df_ir2['saldo_final'] = df_ir2['saldo_final'].apply(lambda x: abs(x))
             df_ir2.columns = ['Renglón Formulario DGII', 'Monto Acumulado (RD$)']
             st.dataframe(df_ir2, use_container_width=True)
             
-        # --- PRE-CÁLCULO DE MOTORES MÓDULOS FISCALES PARA REUTILIZACIÓN EN CONSOLIDADO ---
-        # Motor IT-1
+        # --- EXTRACCIÓN DE VALORES COMUNES ---
         monto_ingresos_gravados = abs(df_balanza[df_balanza['codigo'].str.startswith('4', na=False)]['saldo_final'].sum())
         itbis_ventas_generado = monto_ingresos_gravados * TASA_ITBIS_GENERAL
         compras_y_gastos_base = abs(df_balanza[(df_balanza['codigo'].str.startswith(('5', '6'), na=False)) & (~df_balanza['cuenta'].str.lower().str.contains('personal|sueldo|salario|tss|infotep|percapita', na=False))]['saldo_final'].sum())
@@ -227,14 +249,12 @@ if uploaded_file is not None:
         itbis_ret_tarjetas_2 = cuenta_ret_tarjeta if cuenta_ret_tarjeta > 0 else (monto_ingresos_gravados * 0.60) * 0.02
         neto_itbis_resultado = itbis_ventas_generado - (itbis_soportado_compras + itbis_ret_100_fisicas + itbis_ret_30_juridicas + itbis_ret_tarjetas_2)
 
-        # Motor IR-3 / TSS
         gasto_nominas_global = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('personal|sueldo|salario', na=False)]['saldo_final'].sum())
         gasto_per_capita_balanza = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('percapita|per capita|dependiente adicional', na=False)]['saldo_final'].sum())
         costo_patronal_total = (gasto_nominas_global * TASA_SFS_PATRONAL) + (gasto_nominas_global * TASA_AFP_PATRONAL) + (gasto_nominas_global * TASA_SRL_PROMEDIO) + (gasto_nominas_global * TASA_INFOTEP)
         retenciones_empleados_total = (gasto_nominas_global * TASA_SFS_EMPLEADO) + (gasto_nominas_global * TASA_AFP_EMPLEADO) + gasto_per_capita_balanza
         total_liquidacion_ir3_tss = costo_patronal_total + retenciones_empleados_total
 
-        # Motor IR-17
         b_honorarios = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('honorario', na=False)]['saldo_final'].sum())
         b_reparaciones = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('reparacion|mantenimiento', na=False)]['saldo_final'].sum())
         b_vehiculos = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('vehiculo personal|combustible empleado', na=False)]['saldo_final'].sum())
@@ -244,14 +264,18 @@ if uploaded_file is not None:
         b_canada = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('canada|canadá', na=False)]['saldo_final'].sum())
         b_exterior_general = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('exterior|remesa|extranjero', na=False) & ~df_balanza['cuenta'].str.lower().str.contains('españa|espana|canada|canadá', na=False)]['saldo_final'].sum())
         
-        total_ir17 = (b_honorarios * 0.10) + (b_reparaciones * 0.02) + (b_vehiculos * 0.27) + (b_renta_vivienda * 0.27) + (b_otras_retribuciones * 0.27) + (b_espana * 0.10) + (b_canada * 0.18) + (b_exterior_general * 0.27)
+        r_honorarios = b_honorarios * 0.10
+        r_reparaciones = b_reparaciones * 0.02
+        r_vehiculos = b_vehiculos * 0.27
+        r_renta = b_renta_vivienda * 0.27
+        r_otras_ret = b_otras_retribuciones * 0.27
+        r_espana = b_espana * 0.10
+        r_canada = b_canada * 0.18
+        r_exterior = b_exterior_general * 0.27
+        total_ir17 = r_honorarios + r_reparaciones + r_vehiculos + r_renta + r_otras_ret + r_espana + r_canada + r_exterior
 
         with tab5:
-            st.markdown("### 🇩🇴 Módulo Avanzado de Liquidación - Formulario IT-1 (ITBIS)")
-            with st.expander("📥 CARGAR PRE-ENVÍOS OFICIALES DE FORMATOS 606 Y 607", expanded=False):
-                up_606 = st.file_uploader("Subir txt o Excel definitivo de Compras (606)", type=["txt", "xlsx"], key="it1_606")
-                up_607 = st.file_uploader("Subir txt o Excel definitivo de Ventas (607)", type=["txt", "xlsx"], key="it1_607")
-            
+            st.markdown("### 🇩🇴 Módulo de Liquidación de ITBIS (Anexo A + Formulario IT-1)")
             if neto_itbis_resultado > 0:
                 st.error(f"🚨 **IMPUESTO NETO A PAGAR EN IT-1:** RD$ {neto_itbis_resultado:,.2f}")
             else:
@@ -260,77 +284,132 @@ if uploaded_file is not None:
             cit1, cit2, cit3, cit4 = st.columns(4)
             cit1.metric("ITBIS Ventas (Generado)", f"RD$ {itbis_ventas_generado:,.2f}")
             cit2.metric("ITBIS Soportado (Adelantos)", f"RD$ {itbis_soportado_compras:,.2f}")
-            cit3.metric("Retenciones Sufridas (30%/100%)", f"RD$ {itbis_ret_100_fisicas + itbis_ret_30_juridicas:,.2f}")
-            cit4.metric("Retención Tarjeta (2% Norma 08-04)", f"RD$ {itbis_ret_tarjetas_2:,.2f}")
+            cit3.metric("Retenciones Sufridas", f"RD$ {itbis_ret_100_fisicas + itbis_ret_30_juridicas:,.2f}")
+            cit4.metric("Retención Tarjeta (2%)", f"RD$ {itbis_ret_tarjetas_2:,.2f}")
             
+            # --- GENERACIÓN DEL LIBRO EXCEL (ANEXO A + IT-1 VINCULADOS) ---
+            buffer_it1 = io.BytesIO()
+            wb_it1 = openpyxl.Workbook()
+            
+            # 1. Configurar Hoja del Anexo A
+            ws_anexo = wb_it1.active
+            ws_anexo.title = "Anexo_A_IT1"
+            aplicar_estilos_base(ws_anexo, f"TAXTECH AUDITOR RD — ANEXO A DEL IT-1: {empresa.upper()}", f"Desglose Analítico de Ingresos, Adelantos y Retenciones")
+            
+            headers_anexo = ["Casilla", "Descripción del Concepto Operativo", "Monto Base Imponible", "ITBIS Liquidado / Retenido"]
+            for col_idx, h in enumerate(headers_anexo, start=2):
+                cell = ws_anexo.cell(row=5, column=col_idx, value=h)
+                cell.font = FONT_HEADER; cell.fill = FILL_HEADER; cell.border = CELL_BORDER
+            
+            datos_anexo = [
+                ("Casilla 1", "Ingresos por Operaciones Locales Gravadas (Ventas)", monto_ingresos_gravados, itbis_ventas_generado),
+                ("Casilla 12", "ITBIS Pagado en Compras Locales (Adelantos del 606)", compras_y_gastos_base, itbis_soportado_compras),
+                ("Casilla 22", "ITBIS Retenido por Servicios Profesionales de Personas Físicas (100%)", base_honorarios_fisicos, itbis_ret_100_fisicas),
+                ("Casilla 23", "ITBIS Retenido entre Personas Jurídicas (30% Norma 02-05)", base_servicios_juridicas, itbis_ret_30_juridicas),
+                ("Casilla 30", "Retención por Operaciones con Tarjetas de Crédito (2% Norma 08-04)", 0.00, itbis_ret_tarjetas_2)
+            ]
+            
+            for idx, (cas, con, bas, imp) in enumerate(datos_anexo):
+                r_idx = 6 + idx
+                ws_anexo.cell(row=r_idx, column=2, value=cas).alignment = Alignment(horizontal="center")
+                ws_anexo.cell(row=r_idx, column=3, value=con)
+                c_bas = ws_anexo.cell(row=r_idx, column=4, value=bas)
+                c_bas.number_format = 'RD$ #,##0.00'; c_bas.alignment = Alignment(horizontal="right")
+                c_imp = ws_anexo.cell(row=r_idx, column=5, value=imp)
+                c_imp.number_format = 'RD$ #,##0.00'; c_imp.alignment = Alignment(horizontal="right")
+                
+                for c in range(2, 6):
+                    cell = ws_anexo.cell(row=r_idx, column=c)
+                    cell.font = FONT_BODY; cell.border = CELL_BORDER
+                    if idx % 2 == 1: cell.fill = FILL_ZEBRA
+            autoajustar_columnas(ws_anexo)
+            
+            # 2. Configurar Hoja del Formulario IT-1 (Vinculada por Fórmulas)
+            ws_form = wb_it1.create_sheet(title="Formulario_IT1")
+            aplicar_estilos_base(ws_form, f"TAXTECH AUDITOR RD — FORMULARIO DEFINITIVO IT-1: {empresa.upper()}", f"Liquidación Final del Impuesto — Período: {periodo}")
+            
+            headers_form = ["Línea", "Renglón Final IT-1", "Fórmula de Amarre (DGII)", "Monto Relacionado"]
+            for col_idx, h in enumerate(headers_form, start=2):
+                cell = ws_form.cell(row=5, column=col_idx, value=h)
+                cell.font = FONT_HEADER; cell.fill = FILL_HEADER; cell.border = CELL_BORDER
+            
+            datos_form = [
+                ("Línea 1", "Total ITBIS Bruto por Operaciones", "=Anexo_A_IT1!E6", "=Anexo_A_IT1!E6"),
+                ("Línea 2", "(-) Menos ITBIS Deducible (Adelanto de Compras)", "=Anexo_A_IT1!E7", "=Anexo_A_IT1!E7"),
+                ("Línea 3", "(-) Menos ITBIS Retenido por Personas Físicas", "=Anexo_A_IT1!E8", "=Anexo_A_IT1!E8"),
+                ("Línea 4", "(-) Menos ITBIS Retenido por Personas Jurídicas", "=Anexo_A_IT1!E9", "=Anexo_A_IT1!E9"),
+                ("Línea 5", "(-) Menos Retención por Tarjetas de Crédito", "=Anexo_A_IT1!E10", "=Anexo_A_IT1!E10"),
+                ("TOTAL", "IMPUESTO NETO A PAGAR / SALDO A FAVOR", "=E6-SUM(E7:E10)", "=E6-SUM(E7:E10)")
+            ]
+            
+            for idx, (lin, ren, for_am, val) in enumerate(datos_form):
+                r_idx = 6 + idx
+                ws_form.cell(row=r_idx, column=2, value=lin).alignment = Alignment(horizontal="center")
+                ws_form.cell(row=r_idx, column=3, value=ren)
+                ws_form.cell(row=r_idx, column=4, value=for_am).font = Font(name="Calibri", size=9, color="7F7F7F")
+                c_val = ws_form.cell(row=r_idx, column=5, value=val)
+                c_val.number_format = 'RD$ #,##0.00'; c_val.alignment = Alignment(horizontal="right")
+                
+                for c in range(2, 6):
+                    cell = ws_form.cell(row=r_idx, column=c)
+                    cell.font = FONT_BODY if lin != "TOTAL" else FONT_BOLD
+                    cell.border = CELL_BORDER
+                    if idx % 2 == 1 and lin != "TOTAL": cell.fill = FILL_ZEBRA
+                    if lin == "TOTAL": cell.fill = FILL_TOTAL
+            
+            autoajustar_columnas(ws_form)
+            wb_it1.save(buffer_it1)
+            
+            st.markdown(" ")
+            st.download_button(
+                label="📥 Descargar Libro Completo IT-1 (Anexo A + Formulario)", 
+                data=buffer_it1.getvalue(), 
+                file_name=f"Borrador_Completo_IT1_{empresa.replace(' ', '_')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
         with tab6:
             st.markdown("### 🏢 Módulo de Conciliación y Liquidación TSS / INFOTEP / IR-3")
-            num_dependientes_estimados = round(gasto_per_capita_balanza / COSTO_PER_CAPITA_2026) if gasto_per_capita_balanza > 0 else 0
-            with st.expander("📥 CARGAR ARCHIVO COMPLEMENTARIO DE TXT ENTRADA TSS (IR-4)", expanded=False):
-                up_tss = st.file_uploader("Subir borrador de empleados o txt oficial de la TSS", type=["txt", "xlsx"], key="tss_file")
-            
-            st.markdown("---")
             cp1, cp2, cp3, cp4 = st.columns(4)
             cp1.metric("SFS Patronal (7.09%)", f"RD$ {gasto_nominas_global * TASA_SFS_PATRONAL:,.2f}")
             cp2.metric("AFP Patronal (7.10%)", f"RD$ {gasto_nominas_global * TASA_AFP_PATRONAL:,.2f}")
             cp3.metric("Seguro Riesgos Laborales (1.20%)", f"RD$ {gasto_nominas_global * TASA_SRL_PROMEDIO:,.2f}")
             cp4.metric("Aporte INFOTEP (1.00%)", f"RD$ {gasto_nominas_global * TASA_INFOTEP:,.2f}")
             
-        with tab7:
-            st.markdown("### 💸 Liquidación y Segmentación Estricta - Formulario IR-17")
-            with st.expander("📥 CARGAR AUXILIAR DE RETENCIONES COMPLEMENTARIAS", expanded=False):
-                up_ir17 = st.file_uploader("Subir hoja de cálculo de retenciones del exterior / remesas", type=["xlsx", "csv"], key="ir17_file")
-            st.error(f"💸 **TOTAL A PAGAR FORMULARIO IR-17:** RD$ {total_ir17:,.2f}")
+            buffer_tss = io.BytesIO()
+            wb_tss = openpyxl.Workbook()
+            ws_tss = wb_tss.active
+            ws_tss.title = "Liquidación TSS"
+            aplicar_estilos_base(ws_tss, f"TAXTECH AUDITOR RD — CONTROL DE NÓMINA: {empresa.upper()}", f"Carga Masiva de Aportes Patronales y Retenciones TSS / IR-3")
             
-        with tab8:
-            st.markdown("### 🏛️ Consolidado Fiscal General del Periodo — Estado de Obligaciones Netas")
-            st.markdown("Resumen unificado de la posición impositiva de la empresa frente a la DGII y la TSS. Puedes cargar borradores finales en cada pestaña para ajustar este cálculo.")
+            headers_tss = ["Tipo Componente", "Concepto de Retención o Aporte", "Porcentaje", "Monto Autocalculado"]
+            for col_idx, h in enumerate(headers_tss, start=2):
+                cell = ws_tss.cell(row=5, column=col_idx, value=h)
+                cell.font = FONT_HEADER; cell.fill = FILL_HEADER; cell.border = CELL_BORDER
             
-            # Ajuste de ITBIS neto a presentar en la suma (si es saldo a favor se resta o computa como cero para el flujo de caja inmediato)
-            itbis_caja = neto_itbis_resultado if neto_itbis_resultado > 0 else 0.0
+            datos_tss = [
+                ("Patronal", "Seguro Familiar de Salud (SFS Patronal)", 0.0709, gasto_nominas_global * 0.0709),
+                ("Patronal", "Fondo de Pensiones (AFP Patronal)", 0.0710, gasto_nominas_global * 0.0710),
+                ("Patronal", "Seguro de Riesgos Laborales (SRL)", 0.0120, gasto_nominas_global * 0.0120),
+                ("Patronal", "Aporte INFOTEP Obligatorio (1%)", 0.0100, gasto_nominas_global * 0.0100),
+                ("Empleado", "SFS Retención Trabajador", 0.0304, gasto_nominas_global * 0.0304),
+                ("Empleado", "AFP Retención Trabajador", 0.0287, gasto_nominas_global * 0.0287),
+                ("Empleado", "Aporte Percápita Adicional (Dependientes)", 0.0000, gasto_per_capita_balanza),
+                ("TOTAL", "TOTAL LIQUIDACIÓN MENSUAL DEL ARCHIVO TSS", 0.0000, f"=SUM(E6:E12)")
+            ]
             
-            # --- GRAN TOTAL GENERAL A LIQUIDAR ---
-            gran_total_periodo_pagar = itbis_caja + total_liquidacion_ir3_tss + total_ir17
-            
-            st.markdown("---")
-            st.warning(f"🏦 **EFECTIVO TOTAL ESTIMADO A TRANSFERIR A COLECTURÍA (DGII / TSS):** RD$ {gran_total_periodo_pagar:,.2f}")
-            st.markdown("---")
-            
-            # KPIs de Desglose Consolidado
-            cc1, cc2, cc3, cc4 = st.columns(4)
-            cc1.metric("IT-1 (ITBIS Neto)", f"RD$ {itbis_caja:,.2f}", delta=f"Saldo Favor: {abs(neto_itbis_resultado):,.2f}" if neto_itbis_resultado < 0 else "Impuesto Determinado")
-            cc2.metric("TSS / IR-3 (Nómina Completa)", f"RD$ {total_liquidacion_ir3_tss:,.2f}")
-            cc3.metric("IR-17 (Otras Retenciones)", f"RD$ {total_ir17:,.2f}")
-            cc4.metric("Total General Liquidación", f"RD$ {gran_total_periodo_pagar:,.2f}")
-            
-            st.markdown("---")
-            st.markdown("#### 📋 Matriz Consolidada de Carga Financiera")
-            
-            df_consolidado_general = pd.DataFrame({
-                'Formulario / Obligación Fiscal': [
-                    'Formulario IT-1 (Impuesto sobre la Transferencia de Bienes Industrializados y Servicios)',
-                    'Tesorería de la Seguridad Social (TSS) - Aportes Patronales de Ley',
-                    'Formulario IR-3 (Retenciones del Impuesto Sobre la Renta de Empleados + Descuentos TSS)',
-                    'Formulario IR-17 (Retenciones de ISR a Terceros y Retribuciones Complementarias)',
-                    'TOTAL ESTIMADO DE COMPROMISOS FISCALES COMPENSADOS Y LIQUIDADOS'
-                ],
-                'Origen de Datos / Módulo': ['Módulo Mensual IT-1', 'Módulo Nómina Patronal', 'Módulo Nómina Retenciones', 'Módulo IR-17 Retenciones', 'Consolidación de Caja'],
-                'Monto Determinado (RD$)': [itbis_caja, costo_patronal_total, retenciones_empleados_total, total_ir17, gran_total_periodo_pagar]
-            })
-            
-            st.dataframe(df_consolidado_general.style.format({
-                'Monto Determinado (RD$)': 'RD$ {:,.2f}'
-            }), use_container_width=True)
-            
-            # Exportador Consolidado
-            buffer_consolidado = io.BytesIO()
-            with pd.ExcelWriter(buffer_consolidado, engine='openpyxl') as writer:
-                df_consolidado_general.to_excel(writer, index=False, sheet_name='Consolidado_Fiscal')
-            st.download_button(
-                label="📥 Descargar Volante de Consolidación General (Excel)",
-                data=buffer_consolidado.getvalue(),
-                file_name=f"Consolidado_Fiscal_Periodo_{empresa.replace(' ', '_')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-else:
-    st.info("👋 Por favor, carga tu archivo de Balanza de Comprobación para desplegar los cálculos automáticos.")
+            for idx, (tipo, con, por, mnt) in enumerate(datos_tss):
+                r_idx = 6 + idx
+                ws_tss.cell(row=r_idx, column=2, value=tipo).alignment = Alignment(horizontal="center")
+                ws_tss.cell(row=r_idx, column=3, value=con)
+                c_por = ws_tss.cell(row=r_idx, column=4, value=por)
+                c_por.number_format = '0.00%'; c_por.alignment = Alignment(horizontal="center")
+                c_mnt = ws_tss.cell(row=r_idx, column=5, value=mnt)
+                c_mnt.number_format = 'RD$ #,##0.00'; c_mnt.alignment = Alignment(horizontal="right")
+                
+                for c in range(2, 6):
+                    cell = ws_tss.cell(row=r_idx, column=c)
+                    cell.font = FONT_BODY if tipo != "TOTAL" else FONT_BOLD
+                    cell.border = CELL_BORDER
+                    if idx % 2 == 1 and tipo != "TOTAL": cell.fill = FILL_ZEBRA
+                    if tipo == "TOTAL": cell.fill = FILL_TOTAL
