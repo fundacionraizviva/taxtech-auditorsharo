@@ -52,13 +52,19 @@ def procesar_balanza(file) -> pd.DataFrame:
             st.error(f"⚠️ Estructura de archivo incorrecta. Debe incluir las columnas: {list(columnas_requeridas)}")
             return pd.DataFrame()
             
+        # Limpieza y normalización de textos base
         df['codigo'] = df['codigo'].fillna('').astype(str).str.strip()
         df['codigo'] = df['codigo'].apply(lambda x: x.split('.')[0] if '.' in x else x)
+        df['cuenta'] = df['cuenta'].fillna('').astype(str).str.strip()
+        
+        # Filtrar y eliminar filas de totales o vacías para que no alteren las sumas de las métricas
+        df = df[~df['codigo'].str.lower().contains('total|resultado|suma', na=False)]
+        df = df[~df['cuenta'].str.lower().contains('total|resultado|suma', na=False)]
+        df = df[df['codigo'] != '']
         
         for col in ['debito', 'credito', 'saldo_final']:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
             
-        df['cuenta'] = df['cuenta'].astype(str).str.strip()
         return df
     except Exception as e:
         st.error(f"❌ Error crítico en el procesamiento del archivo: {str(e)}")
@@ -71,9 +77,11 @@ def analizar_balanza(df: pd.DataFrame) -> pd.DataFrame:
     
     for _, row in df.iterrows():
         codigo_str = row['codigo']
+        nombre_cuenta = str(row['cuenta']).strip().lower()
         
-        if not codigo_str:
-            alertas_nat.append("Código Vacío")
+        # Validaciones de seguridad para saltar celdas inconsistentes
+        if not codigo_str or any(keyword in nombre_cuenta for keyword in ['total', 'suma']):
+            alertas_nat.append("Ignorado")
             alertas_fisc.append("Sin observaciones")
             continue
             
@@ -88,7 +96,6 @@ def analizar_balanza(df: pd.DataFrame) -> pd.DataFrame:
         else:
             alertas_nat.append("Correcto")
             
-        nombre_cuenta = row['cuenta'].lower()
         alerta_f = "Sin observaciones"
         for palabra, mensaje in PALABRAS_CRITICAS_ART287.items():
             if palabra in nombre_cuenta:
@@ -144,7 +151,7 @@ if uploaded_file is not None:
     if not df_balanza.empty:
         df_balanza = analizar_balanza(df_balanza)
         
-        # Corrección: Absoluto matemático para evitar valores negativos en los KPIs
+        # Filtro de seguridad para la sumatoria de métricas base
         total_activos = abs(df_balanza[df_balanza['codigo'].str.startswith('1', na=False)]['saldo_final'].sum())
         total_ingresos = abs(df_balanza[df_balanza['codigo'].str.startswith('4', na=False)]['saldo_final'].sum())
         
@@ -155,7 +162,7 @@ if uploaded_file is not None:
         st.markdown("---")
         st.subheader(f"📌 Informe de Auditoría Analítica: {empresa} — Período: {periodo}")
         
-        # Módulo de KPIs en positivo y formateado
+        # Módulo de KPIs
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Total Ingresos Declarados", f"RD$ {total_ingresos:,.2f}")
         c2.metric("Total Activos Registrados", f"RD$ {total_activos:,.2f}")
@@ -173,7 +180,8 @@ if uploaded_file is not None:
             
         with tab2:
             st.markdown("### Cuentas con Saldos Fuera de su Naturaleza Contable")
-            df_errores = df_balanza[df_balanza['validacion_naturaleza'] != "Correcto"]
+            # Excluimos las líneas marcadas como Ignoradas para la vista de errores
+            df_errores = df_balanza[(df_balanza['validacion_naturaleza'] != "Correcto") & (df_balanza['validacion_naturaleza'] != "Ignorado")]
             if not df_errores.empty:
                 st.error(f"Se detectaron {len(df_errores)} cuentas con saldos contrarios a su dinámica operativa contable.")
                 st.dataframe(df_errores[['codigo', 'cuenta', 'saldo_final', 'validacion_naturaleza']], use_container_width=True)
