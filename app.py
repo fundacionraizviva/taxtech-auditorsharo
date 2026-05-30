@@ -174,9 +174,7 @@ tasa_referencia = 0.01 if tipo_entidad == "Comercial / Servicios" else 0.005
 porcentaje_mp = st.sidebar.slider("Porcentaje de Materialidad", 0.5, 3.0, tasa_referencia * 100, step=0.1) / 100
 porcentaje_me = st.sidebar.slider("Porcentaje de Materialidad de Ejecución (ME)", 50, 75, 75, step=5) / 100
 
-st.title("📊 TaxTech Auditor - Análisis de Balanza & Riesgo Fiscal")
 st.header("1. Carga de Balanza de Comprobación Base")
-
 uploaded_file = st.file_uploader("Upload", type=["xlsx", "csv"], label_visibility="collapsed")
 
 if uploaded_file is not None:
@@ -231,12 +229,14 @@ if uploaded_file is not None:
                 
         with tab4:
             st.markdown("### 📋 Mapeo y Cruce Avanzado - Formulario Anual IR-2")
+            with st.expander("📥 CARGAR ARCHIVO AUXILIAR DE ANEXOS IR-2 (DGII)", expanded=False):
+                uploaded_anexos = st.file_uploader("Subir borrador de anexos (A, B, C, D) en Excel", type=["xlsx"], key="ir2_anexos")
             df_ir2 = df_balanza.groupby('casilla_ir2')['saldo_final'].sum().reset_index()
             df_ir2['saldo_final'] = df_ir2['saldo_final'].apply(lambda x: abs(x))
             df_ir2.columns = ['Renglón Formulario DGII', 'Monto Acumulado (RD$)']
             st.dataframe(df_ir2, use_container_width=True)
             
-        # --- EXTRACCIÓN DE VALORES COMUNES ---
+        # --- EXTRACCIÓN Y CÁLCULOS FISCALES DEL PERIODO ---
         monto_ingresos_gravados = abs(df_balanza[df_balanza['codigo'].str.startswith('4', na=False)]['saldo_final'].sum())
         itbis_ventas_generado = monto_ingresos_gravados * TASA_ITBIS_GENERAL
         compras_y_gastos_base = abs(df_balanza[(df_balanza['codigo'].str.startswith(('5', '6'), na=False)) & (~df_balanza['cuenta'].str.lower().str.contains('personal|sueldo|salario|tss|infotep|percapita', na=False))]['saldo_final'].sum())
@@ -355,4 +355,165 @@ if uploaded_file is not None:
                     if lin == "TOTAL": cell.fill = FILL_TOTAL
             
             autoajustar_columnas(ws_form)
-            wb_
+            wb_it1.save(buffer_it1)
+            
+            st.markdown(" ")
+            st.download_button(
+                label="📥 Descargar Libro Completo IT-1 (Anexo A + Formulario)", 
+                data=buffer_it1.getvalue(), 
+                file_name=f"Borrador_Completo_IT1_{empresa.replace(' ', '_')}.xlsx"
+            )
+
+        with tab6:
+            st.markdown("### 🏢 Módulo de Conciliación y Liquidación TSS / INFOTEP / IR-3")
+            
+            # Subir detalles de empleados para la TSS (Cargador Auxiliar Operativo)
+            uploaded_empleados = st.file_uploader("Subir listado auxiliar de empleados (Excel/CSV con salarios individuales)", type=["xlsx", "csv"], key="tss_empleados")
+            if uploaded_empleados is not None:
+                st.success("✅ Detalle de empleados cargado correctamente para cruce con IR-4.")
+            
+            cp1, cp2, cp3, cp4 = st.columns(4)
+            cp1.metric("SFS Patronal (7.09%)", f"RD$ {gasto_nominas_global * TASA_SFS_PATRONAL:,.2f}")
+            cp2.metric("AFP Patronal (7.10%)", f"RD$ {gasto_nominas_global * TASA_AFP_PATRONAL:,.2f}")
+            cp3.metric("Seguro Riesgos Laborales (1.20%)", f"RD$ {gasto_nominas_global * TASA_SRL_PROMEDIO:,.2f}")
+            cp4.metric("Aporte INFOTEP (1.00%)", f"RD$ {gasto_nominas_global * TASA_INFOTEP:,.2f}")
+            
+            buffer_tss = io.BytesIO()
+            wb_tss = openpyxl.Workbook()
+            ws_tss = wb_tss.active
+            ws_tss.title = "Liquidación TSS"
+            aplicar_estilos_base(ws_tss, f"TAXTECH AUDITOR RD — CONTROL DE NÓMINA: {empresa.upper()}", f"Carga Masiva de Aportes Patronales y Retenciones TSS / IR-3")
+            
+            headers_tss = ["Tipo Componente", "Concepto de Retención o Aporte", "Porcentaje", "Monto Autocalculado"]
+            for col_idx, h in enumerate(headers_tss, start=2):
+                cell = ws_tss.cell(row=5, column=col_idx, value=h)
+                cell.font = FONT_HEADER; cell.fill = FILL_HEADER; cell.border = CELL_BORDER
+            
+            datos_tss = [
+                ("Patronal", "Seguro Familiar de Salud (SFS Patronal)", 0.0709, gasto_nominas_global * 0.0709),
+                ("Patronal", "Fondo de Pensiones (AFP Patronal)", 0.0710, gasto_nominas_global * 0.0710),
+                ("Patronal", "Seguro de Riesgos Laborales (SRL)", 0.0120, gasto_nominas_global * 0.0120),
+                ("Patronal", "Aporte INFOTEP Obligatorio (1%)", 0.0100, gasto_nominas_global * 0.0100),
+                ("Empleado", "SFS Retención Trabajador", 0.0304, gasto_nominas_global * 0.0304),
+                ("Empleado", "AFP Retención Trabajador", 0.0287, gasto_nominas_global * 0.0287),
+                ("Empleado", "Aporte Percápita Adicional (Dependientes)", 0.0000, gasto_per_capita_balanza),
+                ("TOTAL", "TOTAL LIQUIDACIÓN MENSUAL DEL ARCHIVO TSS", 0.0000, f"=SUM(E6:E12)")
+            ]
+            
+            for idx, (tipo, con, por, mnt) in enumerate(datos_tss):
+                r_idx = 6 + idx
+                ws_tss.cell(row=r_idx, column=2, value=tipo).alignment = Alignment(horizontal="center")
+                ws_tss.cell(row=r_idx, column=3, value=con)
+                c_por = ws_tss.cell(row=r_idx, column=4, value=por)
+                c_por.number_format = '0.00%'; c_por.alignment = Alignment(horizontal="center")
+                c_mnt = ws_tss.cell(row=r_idx, column=5, value=mnt)
+                c_mnt.number_format = 'RD$ #,##0.00'; c_mnt.alignment = Alignment(horizontal="right")
+                
+                for c in range(2, 6):
+                    cell = ws_tss.cell(row=r_idx, column=c)
+                    cell.font = FONT_BODY if tipo != "TOTAL" else FONT_BOLD
+                    cell.border = CELL_BORDER
+                    if idx % 2 == 1 and tipo != "TOTAL": cell.fill = FILL_ZEBRA
+                    if tipo == "TOTAL": cell.fill = FILL_TOTAL
+            
+            autoajustar_columnas(ws_tss)
+            wb_tss.save(buffer_tss)
+            st.download_button("📥 Descargar Plantilla Auxiliar TSS (Excel)", data=buffer_tss.getvalue(), file_name=f"Plantilla_TSS_{empresa.replace(' ', '_')}.xlsx")
+
+        with tab7:
+            st.markdown("### 💸 Formulario IR-17: Declaración Jurada de Otras Retenciones")
+            st.error(f"💸 **TOTAL IMPUESTO A PAGAR (IR-17):** RD$ {total_ir17:,.2f}")
+            
+            df_ir17_pantalla = pd.DataFrame({
+                'Casilla': ['Casilla 1', 'Casilla 2', 'Casilla 8', 'Casilla 9', 'Casilla 10', 'Casilla 15', 'Casilla 16', 'Casilla 17'],
+                'Concepto Oficial': [
+                    'Honorarios por Servicios Profesionales', 'Otras Rentas / Servicios Técnicos y Reparaciones',
+                    'Retribuciones Complementarias - Vehículos', 'Retribuciones Complementarias - Alquileres',
+                    'Retribuciones Complementarias - Otros', 'Remesas - España', 'Remesas - Canadá', 'Remesas - General'
+                ],
+                'Tasa': ['10%', '2%', '27%', '27%', '27%', '10%', '18%', '27%'],
+                'Base Imponible': [b_honorarios, b_reparaciones, b_vehiculos, b_renta_vivienda, b_otras_retribuciones, b_espana, b_canada, b_exterior_general],
+                'Impuesto Retenido': [r_honorarios, r_reparaciones, r_vehiculos, r_renta, r_otras_ret, r_espana, r_canada, r_exterior]
+            })
+            st.dataframe(df_ir17_pantalla.style.format({'Base Imponible': 'RD$ {:,.2f}', 'Impuesto Retenido': 'RD$ {:,.2f}'}), use_container_width=True, hide_index=True)
+
+            # --- CORRECCIÓN DEFINITIVA DE NOMBRE DEL LIBRO (OPENPYXL) ---
+            buffer_ir17 = io.BytesIO()
+            wb_ir17 = openpyxl.Workbook()
+            ws_ir17 = wb_ir17.active
+            ws_ir17.title = "Borrador IR-17"
+            aplicar_estilos_base(ws_ir17, f"TAXTECH AUDITOR RD — RESUMEN IR-17: {empresa.upper()}", f"Borrador de Casillas Oficiales del Formulario IR-17 de la DGII")
+            
+            headers_ir17 = ["Casilla", "Concepto Detallado (DGII)", "Tasa", "Monto Base Imponible", "Impuesto Retenido"]
+            for col_idx, h in enumerate(headers_ir17, start=2):
+                cell = ws_ir17.cell(row=5, column=col_idx, value=h)
+                cell.font = FONT_HEADER; cell.fill = FILL_HEADER; cell.border = CELL_BORDER
+                cell.alignment = Alignment(horizontal="center" if col_idx in [2,4] else "left")
+            
+            datos_ir17 = [
+                ("Casilla 1", "Honorarios por Servicios Profesionales (Persona Física)", 0.10, b_honorarios),
+                ("Casilla 2", "Otras Rentas / Servicios Técnicos y Reparaciones", 0.02, b_reparaciones),
+                ("Casilla 8", "Retribuciones Complementarias - Asignación de Vehículos / Combustible", 0.27, b_vehiculos),
+                ("Casilla 9", "Retribuciones Complementarias - Pago de Alquileres / Renta de Vivienda", 0.27, b_renta_vivienda),
+                ("Casilla 10", "Retribuciones Complementarias - Otros Beneficios en Especie", 0.27, b_otras_retribuciones),
+                ("Casilla 15", "Remesas al Exterior - Convenio Doble Imposición España", 0.10, b_espana),
+                ("Casilla 16", "Remesas al Exterior - Convenio Doble Imposición Canadá", 0.18, b_canada),
+                ("Casilla 17", "Remesas al Exterior - Otras Rentas de Fuente Dominicana (General)", 0.27, b_exterior_general)
+            ]
+            
+            for idx, (cas, con, tas, bas) in enumerate(datos_ir17):
+                r_idx = 6 + idx
+                ws_ir17.cell(row=r_idx, column=2, value=cas).alignment = Alignment(horizontal="center")
+                ws_ir17.cell(row=r_idx, column=3, value=con)
+                c_tas = ws_ir17.cell(row=r_idx, column=4, value=tas)
+                c_tas.number_format = '0%'; c_tas.alignment = Alignment(horizontal="center")
+                c_bas = ws_ir17.cell(row=r_idx, column=5, value=bas)
+                c_bas.number_format = 'RD$ #,##0.00'; c_bas.alignment = Alignment(horizontal="right")
+                c_imp = ws_ir17.cell(row=r_idx, column=6, value=f"=E{r_idx}*D{r_idx}")
+                c_imp.number_format = 'RD$ #,##0.00'; c_imp.alignment = Alignment(horizontal="right")
+                
+                for c in range(2, 7):
+                    cell = ws_ir17.cell(row=r_idx, column=c)
+                    cell.font = FONT_BODY; cell.border = CELL_BORDER
+                    if idx % 2 == 1: cell.fill = FILL_ZEBRA
+            
+            tot_row = 14
+            ws_ir17.cell(row=tot_row, column=2, value="TOTAL").font = FONT_BOLD
+            ws_ir17.cell(row=tot_row, column=2).fill = FILL_TOTAL; ws_ir17.cell(row=tot_row, column=2).border = CELL_BORDER; ws_ir17.cell(row=tot_row, column=2).alignment = Alignment(horizontal="center")
+            ws_ir17.cell(row=tot_row, column=3, value="Liquidación General de Retenciones").font = FONT_BOLD
+            ws_ir17.cell(row=tot_row, column=3).fill = FILL_TOTAL; ws_ir17.cell(row=tot_row, column=3).border = CELL_BORDER
+            ws_ir17.cell(row=tot_row, column=4, value="").fill = FILL_TOTAL; ws_ir17.cell(row=tot_row, column=4).border = CELL_BORDER
+            
+            t_bas = ws_ir17.cell(row=tot_row, column=5, value=f"=SUM(E6:E13)")
+            t_bas.number_format = 'RD$ #,##0.00'; t_bas.font = FONT_BOLD; t_bas.fill = FILL_TOTAL; t_bas.border = CELL_BORDER
+            t_imp = ws_ir17.cell(row=tot_row, column=6, value=f"=SUM(F6:F13)")
+            t_imp.number_format = 'RD$ #,##0.00'; t_imp.font = FONT_BOLD; t_imp.fill = FILL_TOTAL; t_imp.border = CELL_BORDER
+            
+            autoajustar_columnas(ws_ir17)
+            wb_ir17.save(buffer_ir17)
+            st.download_button("📥 Descargar Borrador Resumido IR-17 (Excel)", data=buffer_ir17.getvalue(), file_name=f"Borrador_Resumido_IR17_{empresa.replace(' ', '_')}.xlsx")
+            
+        with tab8:
+            st.markdown("### 🏛️ Consolidado Fiscal General del Periodo")
+            itbis_caja = neto_itbis_resultado if neto_itbis_resultado > 0 else 0.0
+            gran_total_periodo_pagar = itbis_caja + total_liquidacion_ir3_tss + total_ir17
+            
+            st.warning(f"🏦 **EFECTIVO TOTAL ESTIMADO A TRANSFERIR (DGII / TSS):** RD$ {gran_total_periodo_pagar:,.2f}")
+            
+            buffer_con = io.BytesIO()
+            wb_con = openpyxl.Workbook()
+            ws_con = wb_con.active
+            ws_con.title = "Consolidado Fiscal"
+            aplicar_estilos_base(ws_con, f"TAXTECH AUDITOR RD — VOLANTE DE CONSOLIDACIÓN GENERAL", f"Resumen Maestro de Obligaciones Liquidadas — Período Fiscal: {periodo}")
+            
+            headers_con = ["Formulario Oficial", "Origen / Módulo", "Estado de Cuenta", "Monto Neto Del Periodo"]
+            for col_idx, h in enumerate(headers_con, start=2):
+                cell = ws_con.cell(row=5, column=col_idx, value=h)
+                cell.font = FONT_HEADER; cell.fill = FILL_HEADER; cell.border = CELL_BORDER
+            
+            datos_con = [
+                ("Formulario IT-1", "Módulo de ITBIS / 606 / 607", "Saldo a Pagar" if neto_itbis_resultado > 0 else "Saldo a Favor", itbis_caja),
+                ("Tesorería TSS", "Seguridad Social Patronal", "Costo Operativo", costo_patronal_total),
+                ("Formulario IR-3", "Retenciones Empleados Nómina", "Pasivo de Retención", retenciones_empleados_total),
+                ("Formulario IR-17", "Retenciones Locales / Exterior", "Impuesto Retenido", total_ir17),
+                ("TOTAL GENERAL", "FONDO LIQUID
