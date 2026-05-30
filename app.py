@@ -10,7 +10,7 @@ st.set_page_config(
 )
 
 # ==========================================
-# 1. PARÁMETROS FISCALES Y DE CONFIGURACIÓN (CTRD / TSS / PERCÁPITA 2026)
+# 1. PARÁMETROS FISCALES Y DE CONFIGURACIÓN (CTRD / TSS / ITBIS 2026)
 # ==========================================
 NATURALEZAS = {
     '1': 'Debito', '2': 'Credito', '3': 'Credito',
@@ -39,16 +39,14 @@ MAPEO_IR2 = {
     '63': 'Anexo B - Gastos Financieros'
 }
 
-# Coeficientes Oficiales Ley 87-01 e INFOTEP
+# Coeficientes Oficiales de Ley
+TASA_ITBIS_GENERAL = 0.18
 TASA_SFS_PATRONAL = 0.0709
 TASA_AFP_PATRONAL = 0.0710
 TASA_SRL_PROMEDIO = 0.0120
 TASA_INFOTEP = 0.0100
-
 TASA_SFS_EMPLEADO = 0.0304
 TASA_AFP_EMPLEADO = 0.0287
-
-# Costo Indexado Oficial TSS para Dependiente Adicional
 COSTO_PER_CAPITA_2026 = 1691.38
 
 # ==========================================
@@ -146,14 +144,12 @@ st.sidebar.title("Parámetros de Materialidad (NIA 320)")
 tipo_entidad = st.sidebar.selectbox("Tipo de Entidad", ["Comercial / Servicios", "Zonas Francas", "Financieras"])
 
 tasa_referencia = 0.01 if tipo_entidad == "Comercial / Servicios" else 0.005
-
 porcentaje_mp = st.sidebar.slider("Porcentaje de Materialidad", 0.5, 3.0, tasa_referencia * 100, step=0.1) / 100
 porcentaje_me = st.sidebar.slider("Porcentaje de Materialidad de Ejecución (ME)", 50, 75, 75, step=5) / 100
 
 # --- CUERPO PRINCIPAL ---
 st.title("📊 TaxTech Auditor - Análisis de Balanza & Riesgo Fiscal")
 st.header("1. Carga de Balanza de Comprobación")
-st.markdown("Arrastra tu archivo Excel o CSV generado desde tu software contable (Odoo, QuickBooks, etc.)")
 
 uploaded_file = st.file_uploader("Upload", type=["xlsx", "csv"], label_visibility="collapsed")
 
@@ -185,7 +181,7 @@ if uploaded_file is not None:
         # PESTAÑAS PRINCIPALES
         tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
             "📋 Balanza", "🚨 Inconsistencias", "🇩🇴 Riesgos Art. 287", 
-            "📋 Borrador Anual IR-2", "⚡ Mensual (IT-1, 606, 607)", 
+            "📋 Borrador Anual IR-2", "⚡ Mensual (Liquidación IT-1)", 
             "🏢 Nómina y TSS (IR-3)", "💸 Liquidación IR-17 (Retenciones)"
         ])
         
@@ -215,28 +211,100 @@ if uploaded_file is not None:
             st.dataframe(df_ir2, use_container_width=True)
             
         with tab5:
-            st.markdown("### 🇩🇴 Gestión de Impuestos Mensuales y Formatos de Envío")
-            with st.expander("📊 Resumen Formulario IT-1 (ITBIS)", expanded=True):
-                st.metric("ITBIS Bruto Generado (Sugerido 18%)", f"RD$ {total_ingresos * 0.18:,.2f}")
-            with st.expander("📥 Desglose Analítico - Formato 606", expanded=False):
-                df_606 = df_balanza[(df_balanza['codigo'].str.startswith(('5', '6'), na=False)) & (~df_balanza['cuenta'].str.lower().str.contains('personal|sueldo|salario|tss|infotep', na=False))].copy()
-                df_606['saldo_final'] = df_606['saldo_final'].apply(lambda x: abs(x))
-                df_606['itbis_estimado_compras'] = df_606['saldo_final'] * 0.18
-                st.dataframe(df_606[['codigo', 'cuenta', 'saldo_final', 'itbis_estimado_compras']], use_container_width=True)
-                
+            st.markdown("### 🇩🇴 Módulo Avanzado de Liquidación - Formulario IT-1 (ITBIS)")
+            st.markdown("Determinación analítica del impuesto mensual combinando ingresos, compras, retenciones aplicadas y retenciones de adquirentes (Tarjetas de Crédito).")
+            
+            # --- CÁLCULOS DEL MOTOR DE ITBIS ---
+            # 1. Ventas e ITBIS Generado
+            monto_ingresos_gravados = abs(df_balanza[df_balanza['codigo'].str.startswith('4', na=False)]['saldo_final'].sum())
+            itbis_ventas_generado = monto_ingresos_gravados * TASA_ITBIS_GENERAL
+            
+            # 2. Compras e ITBIS Soportado (Adelantable)
+            compras_y_gastos_base = abs(df_balanza[(df_balanza['codigo'].str.startswith(('5', '6'), na=False)) & (~df_balanza['cuenta'].str.lower().str.contains('personal|sueldo|salario|tss|infotep|percapita', na=False))]['saldo_final'].sum())
+            itbis_soportado_compras = compras_y_gastos_base * TASA_ITBIS_GENERAL
+            
+            # 3. Retenciones de ITBIS Sufridas por Terceros (606 / Compras)
+            base_honorarios_fisicos = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('honorario', na=False)]['saldo_final'].sum())
+            itbis_ret_100_fisicas = (base_honorarios_fisicos * TASA_ITBIS_GENERAL) * 1.00  # 100% Retención ITBIS
+            
+            base_servicios_juridicas = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('servicio tecnico|consultoria|reparacion', na=False)]['saldo_final'].sum())
+            itbis_ret_30_juridicas = (base_servicios_juridicas * TASA_ITBIS_GENERAL) * 0.30   # 30% Retención ITBIS (Norma 02-05)
+            
+            # 4. Retención de Retenciones por Ventas con Tarjetas de Crédito (Norma 08-04)
+            # Buscamos si existe cuenta de retención de tarjetas en el activo o deducimos un estimado sobre ingresos cobrados
+            cuenta_ret_tarjeta = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('retencion tarjeta|adquirente|cardnet|azul', na=False)]['saldo_final'].sum())
+            if cuenta_ret_tarjeta > 0:
+                itbis_ret_tarjetas_2 = cuenta_ret_tarjeta
+            else:
+                # Simulación predictiva: estimamos que un 60% de las ventas fueron con tarjeta si la cuenta contable está vacía
+                itbis_ret_tarjetas_2 = (monto_ingresos_gravados * 0.60) * 0.02
+            
+            # --- FÓRMULA FINAL LIQUIDACIÓN IT-1 ---
+            total_deducciones_creditos = itbis_soportado_compras + itbis_ret_100_fisicas + itbis_ret_30_juridicas + itbis_ret_tarjetas_2
+            neto_itbis_resultado = itbis_ventas_generado - total_deducciones_creditos
+            
+            # --- PANEL DE CONTROL DE LIQUIDACIÓN ---
+            st.markdown("---")
+            if neto_itbis_resultado > 0:
+                st.error(f"🚨 **IMPUESTO NETO A PAGAR EN IT-1:** RD$ {neto_itbis_resultado:,.2f}")
+            else:
+                st.success(f"🎉 **SALDO A FAVOR COMPENSABLE PARA EL PRÓXIMO PERÍODO:** RD$ {abs(neto_itbis_resultado):,.2f}")
+            
+            # KPIs de Liquidación
+            cit1, cit2, cit3, cit4 = st.columns(4)
+            cit1.metric("ITBIS Ventas (Generado)", f"RD$ {itbis_ventas_generado:,.2f}")
+            cit2.metric("ITBIS Soportado (Adelantos)", f"RD$ {itbis_soportado_compras:,.2f}")
+            cit3.metric("Retenciones Sufridas (30%/100%)", f"RD$ {itbis_ret_100_fisicas + itbis_ret_30_juridicas:,.2f}")
+            cit4.metric("Retención Tarjeta (2% Norma 08-04)", f"RD$ {itbis_ret_tarjetas_2:,.2f}")
+            
+            st.markdown("---")
+            st.markdown("#### 📋 Matriz Analítica para Anexos del IT-1")
+            
+            df_it1_matriz = pd.DataFrame({
+                'Descripción del Renglón Fiscal': [
+                    'Ingresos por Ventas de Bienes/Servicios (Base Imponible)',
+                    'ITBIS Bruto sobre Ventas (18%)',
+                    '(-) ITBIS Facturado en Compras / Costos Locales (Adelanto)',
+                    '(-) ITBIS Retenido por Operaciones con Personas Físicas (100% Retención)',
+                    '(-) ITBIS Retenido entre Personas Jurídicas (30% Retención - Norma 02-05)',
+                    '(-) Retención de ITBIS por Ventas con Tarjetas de Crédito (2% - Norma 08-04)',
+                    'RESULTADO FINAL DE LA DECLARACIÓN JURADA (A PAGAR / SALDO A FAVOR)'
+                ],
+                'Monto de Control Contable (RD$)': [
+                    monto_ingresos_gravados,
+                    itbis_ventas_generado,
+                    itbis_soportado_compras,
+                    itbis_ret_100_fisicas,
+                    itbis_ret_30_juridicas,
+                    itbis_ret_tarjetas_2,
+                    neto_itbis_resultado
+                ]
+            })
+            
+            st.dataframe(df_it1_matriz.style.format({
+                'Monto de Control Contable (RD$)': 'RD$ {:,.2f}'
+            }), use_container_width=True)
+            
+            # Botón de Descarga
+            buffer_it1 = io.BytesIO()
+            with pd.ExcelWriter(buffer_it1, engine='openpyxl') as writer:
+                df_it1_matriz.to_excel(writer, index=False, sheet_name='Liquidacion_IT1')
+            st.download_button(
+                label="📥 Descargar Simulación de IT-1 (Excel)",
+                data=buffer_it1.getvalue(),
+                file_name=f"Borrador_IT1_{empresa.replace(' ', '_')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            
         with tab6:
             st.markdown("### 🏢 Módulo de Conciliación y Liquidación TSS / INFOTEP / IR-3")
             gasto_nominas_global = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('personal|sueldo|salario', na=False)]['saldo_final'].sum())
-            
-            # Escáner dinámico para encontrar la cuenta de descuento per cápita adicional en la balanza
             gasto_per_capita_balanza = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('percapita|per capita|dependiente adicional', na=False)]['saldo_final'].sum())
-            # Determinamos cuántos dependientes representa ese monto retenido
             num_dependientes_estimados = round(gasto_per_capita_balanza / COSTO_PER_CAPITA_2026) if gasto_per_capita_balanza > 0 else 0
             
             st.metric("Masa Salarial Global Detectada", f"RD$ {gasto_nominas_global:,.2f}")
             st.markdown("---")
             
-            # FILA 1: DESGLOSE DE APORTES PATRONALES (COSTO EMPRESA)
             st.markdown("##### 💼 Bloque 1: Aportes Patronales (Costo de la Empresa - Gasto Deducible)")
             cp1, cp2, cp3, cp4 = st.columns(4)
             cp1.metric("SFS Patronal (7.09%)", f"RD$ {gasto_nominas_global * TASA_SFS_PATRONAL:,.2f}")
@@ -245,16 +313,11 @@ if uploaded_file is not None:
             cp4.metric("Aporte INFOTEP (1.00%)", f"RD$ {gasto_nominas_global * TASA_INFOTEP:,.2f}")
             
             st.markdown("---")
-            
-            # FILA 2: DESGLOSE DE RETENCIONES AL EMPLEADO (DESCUENTOS DE NÓMINA)
             st.markdown("##### 👥 Bloque 2: Retenciones al Empleado (Pasivo / Descuentos de Nómina)")
             ce1, ce2, ce3, ce4 = st.columns(4)
             ce1.metric("SFS Retenido (3.04%)", f"RD$ {gasto_nominas_global * TASA_SFS_EMPLEADO:,.2f}")
             ce2.metric("AFP Retenido (2.87%)", f"RD$ {gasto_nominas_global * TASA_AFP_EMPLEADO:,.2f}")
-            
-            # IMPACTO DEL APORTE PERCAPITA ADICIONAL DETECTADO
             ce3.metric("Aporte Percápita Adicional (TSS)", f"RD$ {gasto_per_capita_balanza:,.2f}", delta=f"{num_dependientes_estimados} Dependientes", delta_color="inverse")
-            
             tot_retenciones_emp = (gasto_nominas_global * TASA_SFS_EMPLEADO) + (gasto_nominas_global * TASA_AFP_EMPLEADO) + gasto_per_capita_balanza
             ce4.metric("Total Retenido a Empleados", f"RD$ {tot_retenciones_emp:,.2f}")
             
@@ -262,7 +325,6 @@ if uploaded_file is not None:
             st.markdown("#### 📋 Simulación de Carga Masiva TSS por Empleados")
             
             if gasto_nominas_global > 0:
-                # Distribuimos el descuento per cápita detectado en la plantilla de simulación para validación analítica
                 empleados_data = {
                     'Cédula / Identificación': ['001-XXXXXXX-1', '001-XXXXXXX-2', '001-XXXXXXX-3'],
                     'Nombre del Empleado': ['Personal Operativo A', 'Personal Administrativo B', 'Dirección / Gerencia C'],
@@ -270,7 +332,6 @@ if uploaded_file is not None:
                     'Dependientes Adicionales': [num_dependientes_estimados if num_dependientes_estimados > 0 else 0, 0, 0]
                 }
                 df_empleados = pd.DataFrame(empleados_data)
-                
                 df_empleados['SFS Empleado (3.04%)'] = df_empleados['Sueldo Cotizable (RD$)'] * TASA_SFS_EMPLEADO
                 df_empleados['AFP Empleado (2.87%)'] = df_empleados['Sueldo Cotizable (RD$)'] * TASA_AFP_EMPLEADO
                 df_empleados['Percápita Adicional (Descuento)'] = df_empleados['Dependientes Adicionales'] * COSTO_PER_CAPITA_2026
@@ -280,26 +341,11 @@ if uploaded_file is not None:
                 df_empleados['INFOTEP Patronal (1.00%)'] = df_empleados['Sueldo Cotizable (RD$)'] * TASA_INFOTEP
                 
                 st.dataframe(df_empleados.style.format({
-                    'Sueldo Cotizable (RD$)': 'RD$ {:,.2f}',
-                    'SFS Empleado (3.04%)': 'RD$ {:,.2f}',
-                    'AFP Empleado (2.87%)': 'RD$ {:,.2f}',
-                    'Percápita Adicional (Descuento)': 'RD$ {:,.2f}',
-                    'SFS Patronal (7.09%)': 'RD$ {:,.2f}',
-                    'AFP Patronal (7.10%)': 'RD$ {:,.2f}',
-                    'SRL Patronal (1.20%)': 'RD$ {:,.2f}',
-                    'INFOTEP Patronal (1.00%)': 'RD$ {:,.2f}'
+                    'Sueldo Cotizable (RD$)': 'RD$ {:,.2f}', 'SFS Empleado (3.04%)': 'RD$ {:,.2f}',
+                    'AFP Empleado (2.87%)': 'RD$ {:,.2f}', 'Percápita Adicional (Descuento)': 'RD$ {:,.2f}',
+                    'SFS Patronal (7.09%)': 'RD$ {:,.2f}', 'AFP Patronal (7.10%)': 'RD$ {:,.2f}',
+                    'SRL Patronal (1.20%)': 'RD$ {:,.2f}', 'INFOTEP Patronal (1.00%)': 'RD$ {:,.2f}'
                 }), use_container_width=True)
-                
-                buffer_tss = io.BytesIO()
-                with pd.ExcelWriter(buffer_tss, engine='openpyxl') as writer:
-                    df_empleados.to_excel(writer, index=False, sheet_name='Borrador_TSS_IR3')
-                    
-                st.download_button(
-                    label="📥 Descargar Plantilla Auxiliar TSS & IR-3 (Excel)",
-                    data=buffer_tss.getvalue(),
-                    file_name=f"Plantilla_TSS_INFOTEP_{empresa.replace(' ', '_')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
                 
         with tab7:
             st.markdown("### 💸 Liquidación IR-17 (Retenciones)")
