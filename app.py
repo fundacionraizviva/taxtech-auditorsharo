@@ -34,7 +34,6 @@ PALABRAS_CRITICAS_ART287 = {
 def procesar_balanza(file) -> pd.DataFrame:
     """Lee y normaliza la balanza de comprobación previniendo caídas del sistema."""
     try:
-        # Forzamos que la columna 'codigo' se lea como texto desde el inicio si es posible
         if file.name.endswith('.xlsx'):
             df = pd.read_excel(file, engine='openpyxl', dtype={'codigo': str, 'código': str})
         else:
@@ -53,12 +52,9 @@ def procesar_balanza(file) -> pd.DataFrame:
             st.error(f"⚠️ Estructura de archivo incorrecta. Debe incluir las columnas: {list(columnas_requeridas)}")
             return pd.DataFrame()
             
-        # Blindaje: Limpieza estricta y conversión de códigos flotantes/enteros a texto plano
         df['codigo'] = df['codigo'].fillna('').astype(str).str.strip()
-        # Elimina el ".0" que a veces Excel agrega automáticamente a los números enteros
         df['codigo'] = df['codigo'].apply(lambda x: x.split('.')[0] if '.' in x else x)
         
-        # Limpieza de valores numéricos para los importes financieros
         for col in ['debito', 'credito', 'saldo_final']:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
             
@@ -76,13 +72,11 @@ def analizar_balanza(df: pd.DataFrame) -> pd.DataFrame:
     for _, row in df.iterrows():
         codigo_str = row['codigo']
         
-        # Validación de seguridad en caso de filas vacías en el Excel
         if not codigo_str:
             alertas_nat.append("Código Vacío")
             alertas_fisc.append("Sin observaciones")
             continue
             
-        # Extraemos de forma segura el primer dígito como texto
         primer_digito = codigo_str[0]
         nat_esperada = NATURALEZAS.get(primer_digito, None)
         saldo = row['saldo_final']
@@ -150,9 +144,9 @@ if uploaded_file is not None:
     if not df_balanza.empty:
         df_balanza = analizar_balanza(df_balanza)
         
-        # Aseguramos que la máscara booleana no falle si hay códigos vacíos
-        total_activos = df_balanza[df_balanza['codigo'].str.startswith('1', na=False)]['saldo_final'].sum()
-        total_ingresos = df_balanza[df_balanza['codigo'].str.startswith('4', na=False)]['saldo_final'].sum()
+        # Corrección: Absoluto matemático para evitar valores negativos en los KPIs
+        total_activos = abs(df_balanza[df_balanza['codigo'].str.startswith('1', na=False)]['saldo_final'].sum())
+        total_ingresos = abs(df_balanza[df_balanza['codigo'].str.startswith('4', na=False)]['saldo_final'].sum())
         
         base_calculo = total_ingresos if total_ingresos > 0 else total_activos
         mp = base_calculo * porcentaje_mp
@@ -161,7 +155,7 @@ if uploaded_file is not None:
         st.markdown("---")
         st.subheader(f"📌 Informe de Auditoría Analítica: {empresa} — Período: {periodo}")
         
-        # Módulo de KPIs
+        # Módulo de KPIs en positivo y formateado
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Total Ingresos Declarados", f"RD$ {total_ingresos:,.2f}")
         c2.metric("Total Activos Registrados", f"RD$ {total_activos:,.2f}")
