@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import io
 
 # Configuración inicial de la página de Streamlit
 st.set_page_config(
@@ -9,15 +10,11 @@ st.set_page_config(
 )
 
 # ==========================================
-# 1. PARÁMETROS FISCALES Y DE CONFIGURACIÓN (CTRD)
+# 1. PARÁMETROS FISCALES Y DE CONFIGURACIÓN (CTRD / RETENCIONES)
 # ==========================================
 NATURALEZAS = {
-    '1': 'Debito',  # Activos
-    '2': 'Credito', # Pasivos
-    '3': 'Credito', # Capital
-    '4': 'Credito', # Ingresos
-    '5': 'Debito',  # Costos
-    '6': 'Debito'   # Gastos
+    '1': 'Debito', '2': 'Credito', '3': 'Credito',
+    '4': 'Credito', '5': 'Debito', '6': 'Debito'
 }
 
 PALABRAS_CRITICAS_ART287 = {
@@ -28,11 +25,30 @@ PALABRAS_CRITICAS_ART287 = {
     'honorario': 'Riesgo Art. 309 CTRD: Validar aplicación de retenciones fiscales (10% a personas físicas o 2% entre personas jurídicas).'
 }
 
+MAPEO_IR2 = {
+    '11': 'Anexo A - Efectivo e Inversiones Temporales',
+    '12': 'Anexo A - Cuentas por Cobrar (Neto)',
+    '13': 'Anexo A - Inventarios',
+    '15': 'Anexo A - Propiedad, Planta y Equipo (Neto)',
+    '21': 'Anexo A - Pasivos Corrientes / Cuentas por Pagar',
+    '31': 'Anexo A - Capital Social y Reservas',
+    '41': 'Anexo B - Ingresos por Operaciones (Locales)',
+    '51': 'Anexo B - Costo de Ventas / Servicios',
+    '61': 'Anexo B - Gastos de Personal (TSS / Sueldos)',
+    '62': 'Anexo B - Gastos Operativos y de Administración',
+    '63': 'Anexo B - Gastos Financieros'
+}
+
+# Tasas Oficiales de la Seguridad Social e INFOTEP
+TASA_SFS_PATRONAL = 0.0709
+TASA_AFP_PATRONAL = 0.0710
+TASA_SRL_PROMEDIO = 0.0120
+TASA_INFOTEP = 0.0100
+
 # ==========================================
 # 2. FUNCIONES DE LÓGICA DE NEGOCIO Y AUDITORÍA
 # ==========================================
 def procesar_balanza(file) -> pd.DataFrame:
-    """Lee y normaliza la balanza de comprobación previniendo caídas del sistema."""
     try:
         if file.name.endswith('.xlsx'):
             df = pd.read_excel(file, engine='openpyxl', dtype={'codigo': str, 'código': str})
@@ -52,12 +68,10 @@ def procesar_balanza(file) -> pd.DataFrame:
             st.error(f"⚠️ Estructura de archivo incorrecta. Debe incluir las columnas: {list(columnas_requeridas)}")
             return pd.DataFrame()
             
-        # Limpieza y normalización de textos base
         df['codigo'] = df['codigo'].fillna('').astype(str).str.strip()
         df['codigo'] = df['codigo'].apply(lambda x: x.split('.')[0] if '.' in x else x)
         df['cuenta'] = df['cuenta'].fillna('').astype(str).str.strip()
         
-        # CORRECCIÓN: Uso correcto de .str.contains() en Pandas para omitir filas de totales
         df = df[~df['codigo'].str.lower().str.contains('total|resultado|suma', na=False)]
         df = df[~df['cuenta'].str.lower().str.contains('total|resultado|suma', na=False)]
         df = df[df['codigo'] != '']
@@ -71,27 +85,28 @@ def procesar_balanza(file) -> pd.DataFrame:
         return pd.DataFrame()
 
 def analizar_balanza(df: pd.DataFrame) -> pd.DataFrame:
-    """Aplica algoritmos de auditoría contable y fiscal cuenta por cuenta."""
     alertas_nat = []
     alertas_fisc = []
+    casillas_ir2 = []
     
     for _, row in df.iterrows():
         codigo_str = row['codigo']
         nombre_cuenta = str(row['cuenta']).strip().lower()
         
-        # Validaciones de seguridad para saltar celdas inconsistentes
         if not codigo_str or any(keyword in nombre_cuenta for keyword in ['total', 'suma']):
             alertas_nat.append("Ignorado")
             alertas_fisc.append("Sin observaciones")
+            casillas_ir2.append("No Aplica")
             continue
             
         primer_digito = codigo_str[0]
+        primeros_dos = codigo_str[:2]
         nat_esperada = NATURALEZAS.get(primer_digito, None)
         saldo = row['saldo_final']
         
         if nat_esperada == 'Debito' and saldo < 0:
             alertas_nat.append("Saldo Crédito inusual (Naturaleza Débito)")
-        elif nat_esperada == 'Credito' and saldo < 0:
+        elif nat_esperada == 'Credito' and saldo > 0:
             alertas_nat.append("Saldo Débito inusual (Naturaleza Crédito)")
         else:
             alertas_nat.append("Correcto")
@@ -103,8 +118,12 @@ def analizar_balanza(df: pd.DataFrame) -> pd.DataFrame:
                 break
         alertas_fisc.append(alerta_f)
         
+        casilla = MAPEO_IR2.get(primeros_dos, MAPEO_IR2.get(primer_digito + '1', 'Otros Conceptos No Mapeados'))
+        casillas_ir2.append(casilla)
+        
     df['validacion_naturaleza'] = alertas_nat
     df['alerta_fiscal_rd'] = alertas_fisc
+    df['casilla_ir2'] = casillas_ir2
     return df
 
 # ==========================================
@@ -122,21 +141,8 @@ tipo_entidad = st.sidebar.selectbox("Tipo de Entidad", ["Comercial / Servicios",
 
 tasa_referencia = 0.01 if tipo_entidad == "Comercial / Servicios" else 0.005
 
-porcentaje_mp = st.sidebar.slider(
-    "Porcentaje de Materialidad", 
-    min_value=0.5, 
-    max_value=3.0, 
-    value=tasa_referencia * 100, 
-    step=0.1
-) / 100
-
-porcentaje_me = st.sidebar.slider(
-    "Porcentaje de Materialidad de Ejecución (ME)", 
-    min_value=50, 
-    max_value=75, 
-    value=75, 
-    step=5
-) / 100
+porcentaje_mp = st.sidebar.slider("Porcentaje de Materialidad", 0.5, 3.0, tasa_referencia * 100, step=0.1) / 100
+porcentaje_me = st.sidebar.slider("Porcentaje de Materialidad de Ejecución (ME)", 50, 75, 75, step=5) / 100
 
 # --- CUERPO PRINCIPAL ---
 st.title("📊 TaxTech Auditor - Análisis de Balanza & Riesgo Fiscal")
@@ -151,7 +157,6 @@ if uploaded_file is not None:
     if not df_balanza.empty:
         df_balanza = analizar_balanza(df_balanza)
         
-        # Filtro de seguridad para la sumatoria de métricas base
         total_activos = abs(df_balanza[df_balanza['codigo'].str.startswith('1', na=False)]['saldo_final'].sum())
         total_ingresos = abs(df_balanza[df_balanza['codigo'].str.startswith('4', na=False)]['saldo_final'].sum())
         
@@ -171,29 +176,119 @@ if uploaded_file is not None:
         
         st.markdown("---")
         
-        # Pestañas de Navegación
-        tab1, tab2, tab3 = st.tabs(["📋 Balanza de Comprobación", "🚨 Inconsistencias de Naturaleza", "🇩🇴 Diagnóstico Fiscal (Art. 287)"])
+        # PESTAÑAS PRINCIPALES EXTENDIDAS
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+            "📋 Balanza", 
+            "🚨 Inconsistencias", 
+            "🇩🇴 Riesgos Art. 287", 
+            "📋 Borrador Anual IR-2",
+            "⚡ Mensual (IT-1, 606, 607)",
+            "🏢 Nómina y TSS (IR-3)",
+            "💸 Liquidación IR-17 (Retenciones)"
+        ])
         
         with tab1:
-            st.markdown("### Vista General de Cuentas")
             st.dataframe(df_balanza, use_container_width=True)
             
         with tab2:
-            st.markdown("### Cuentas con Saldos Fuera de su Naturaleza Contable")
             df_errores = df_balanza[(df_balanza['validacion_naturaleza'] != "Correcto") & (df_balanza['validacion_naturaleza'] != "Ignorado")]
             if not df_errores.empty:
-                st.error(f"Se detectaron {len(df_errores)} cuentas con saldos contrarios a su dinámica operativa contable.")
+                st.error(f"Se detectaron {len(df_errores)} cuentas con saldos inconsistentes.")
                 st.dataframe(df_errores[['codigo', 'cuenta', 'saldo_final', 'validacion_naturaleza']], use_container_width=True)
             else:
                 st.success("✅ Excelente: No se han encontrado cuentas con inconsistencias en su saldo final.")
                 
         with tab3:
-            st.markdown("### Alertas de Fiscalización y Deducciones Admitidas (DGII)")
             df_fiscal = df_balanza[df_balanza['alerta_fiscal_rd'] != "Sin observaciones"]
             if not df_fiscal.empty:
-                st.warning(f"Atención: Se identificaron {len(df_fiscal)} cuentas con exposición a revisión del Art. 287 del Código Tributario.")
+                st.warning(f"Atención: Se identificaron {len(df_fiscal)} cuentas expuestas a revisión fiscal.")
                 st.dataframe(df_fiscal[['codigo', 'cuenta', 'saldo_final', 'alerta_fiscal_rd']], use_container_width=True)
             else:
-                st.success("✅ Cumplimiento Inicial: No se detectaron cuentas con las palabras de riesgo fiscal configuradas.")
+                st.success("✅ Cumplimiento Inicial: No se detectaron alertas críticas.")
+                
+        with tab4:
+            df_ir2 = df_balanza.groupby('casilla_ir2')['saldo_final'].sum().reset_index()
+            df_ir2['saldo_final'] = df_ir2['saldo_final'].apply(lambda x: abs(x))
+            df_ir2.columns = ['Renglón Formulario DGII', 'Monto Acumulado (RD$)']
+            st.dataframe(df_ir2, use_container_width=True)
+            
+        with tab5:
+            st.markdown("### 🇩🇴 Gestión de Impuestos Mensuales y Formatos de Envío")
+            with st.expander("📊 Resumen Formulario IT-1 (ITBIS)", expanded=True):
+                st.metric("ITBIS Bruto Generado (Sugerido 18%)", f"RD$ {total_ingresos * 0.18:,.2f}")
+            with st.expander("📥 Desglose Analítico - Formato 606", expanded=False):
+                df_606 = df_balanza[(df_balanza['codigo'].str.startswith(('5', '6'), na=False)) & (~df_balanza['cuenta'].str.lower().str.contains('personal|sueldo|salario|tss|infotep', na=False))].copy()
+                df_606['saldo_final'] = df_606['saldo_final'].apply(lambda x: abs(x))
+                df_606['itbis_estimado_compras'] = df_606['saldo_final'] * 0.18
+                st.dataframe(df_606[['codigo', 'cuenta', 'saldo_final', 'itbis_estimado_compras']], use_container_width=True)
+                
+        with tab6:
+            st.markdown("### 🏢 Módulo de Conciliación y Liquidación TSS / INFOTEP / IR-3")
+            gasto_nominas_global = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('personal|sueldo|salario', na=False)]['saldo_final'].sum())
+            c_tss1, c_tss2, c_tss3, c_tss4 = st.columns(4)
+            c_tss1.metric("Masa Salarial Global", f"RD$ {gasto_nominas_global:,.2f}")
+            c_tss2.metric("Total TSS Patronal", f"RD$ {(gasto_nominas_global * TASA_SFS_PATRONAL) + (gasto_nominas_global * TASA_AFP_PATRONAL):,.2f}")
+            c_tss3.metric("Seguro Riesgos Laborales (SRL)", f"RD$ {gasto_nominas_global * TASA_SRL_PROMEDIO:,.2f}")
+            c_tss4.metric("Aporte INFOTEP (1%)", f"RD$ {gasto_nominas_global * TASA_INFOTEP:,.2f}")
+            
+        with tab7:
+            st.markdown("### 💸 Borrador Avanzado Formulario IR-17 (Otras Retenciones)")
+            st.markdown("Cálculo y segmentación automática de retenciones locales e internacionales según el CTRD:")
+            
+            # Algoritmo de filtrado por conceptos del IR-17
+            base_honorarios = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('honorario', na=False)]['saldo_final'].sum())
+            base_reparaciones = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('reparacion|mantenimiento', na=False)]['saldo_final'].sum())
+            
+            # Retribuciones complementarias y beneficios (Renta, Vehículos, etc.)
+            base_retribuciones = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('retribucion|especie|alquiler personal|renta personal|vehiculo personal', na=False)]['saldo_final'].sum())
+            
+            # Segmentación de Remesas al exterior usando tratados CDI RD
+            base_espana = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('españa|espana', na=False)]['saldo_final'].sum())
+            base_canada = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('canada|canadá', na=False)]['saldo_final'].sum())
+            base_exterior_general = abs(df_balanza[(df_balanza['cuenta'].str.lower().str.contains('exterior|remesa|extranjero', na=False)) & (~df_balanza['cuenta'].str.lower().str.contains('españa|espana|canada|canadá', na=False))]['saldo_final'].sum())
+            
+            # Cálculo de los impuestos retenidos liquidados individuales
+            ret_honorarios = base_honorarios * 0.10
+            ret_reparaciones = base_reparaciones * 0.02
+            ret_retribuciones = base_retribuciones * 0.27
+            ret_espana = base_espana * 0.10
+            ret_canada = base_canada * 0.18
+            ret_exterior = base_exterior_general * 0.27
+            
+            total_ir17_liquidar = ret_honorarios + ret_reparaciones + ret_retribuciones + ret_espana + ret_canada + ret_exterior
+            
+            # Dashboard de Resultados IR-17
+            st.metric("💵 Total a Liquidar IR-17", f"RD$ {total_ir17_liquidar:,.2f}")
+            
+            # Matriz de datos resumida para el usuario
+            df_ir17_resumen = pd.DataFrame({
+                'Concepto o Tipo de Retención': [
+                    'Honorarios Profesionales (Persona Física - 10%)',
+                    'Servicios Técnicos y Reparaciones (Persona Física - 2%)',
+                    'Retribuciones Complementarias (Beneficios en Especie/Renta/Vehículos - 27%)',
+                    'Remesas al Exterior - Convenio España (10%)',
+                    'Remesas al Exterior - Convenio Canadá (18%)',
+                    'Remesas al Exterior - Otros Países (General - 27%)'
+                ],
+                'Monto Base Imponible (RD$)': [base_honorarios, base_reparaciones, base_retribuciones, base_espana, base_canada, base_exterior_general],
+                'Impuesto Retenido (RD$)': [ret_honorarios, ret_reparaciones, ret_retribuciones, ret_espana, ret_canada, ret_exterior]
+            })
+            
+            st.dataframe(df_ir17_resumen.style.format({
+                'Monto Base Imponible (RD$)': 'RD$ {:,.2f}',
+                'Impuesto Retenido (RD$)': 'RD$ {:,.2f}'
+            }), use_container_width=True)
+            
+            # Generador Excel IR-17
+            buffer_ir17 = io.BytesIO()
+            with pd.ExcelWriter(buffer_ir17, engine='openpyxl') as writer:
+                df_ir17_resumen.to_excel(writer, index=False, sheet_name='Borrador_IR17')
+                
+            st.download_button(
+                label="📥 Descargar Resumen IR-17 (Excel)",
+                data=buffer_ir17.getvalue(),
+                file_name=f"Borrador_IR17_{empresa.replace(' ', '_')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 else:
     st.info("👋 Por favor, carga tu archivo de Balanza de Comprobación para desplegar los cálculos automáticos.")
