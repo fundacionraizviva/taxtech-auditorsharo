@@ -51,7 +51,7 @@ TASA_SFS_EMPLEADO = 0.0304
 TASA_AFP_EMPLEADO = 0.0287
 COSTO_PER_CAPITA_2026 = 1691.38
 
-# Estilos de Exportación Excel
+# Estilos Corporativos Excel
 FILL_HEADER = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
 FILL_ZEBRA = PatternFill(start_color="F2F5F9", end_color="F2F5F9", fill_type="solid")
 FILL_TOTAL = PatternFill(start_color="DCE6F1", end_color="DCE6F1", fill_type="solid")
@@ -76,7 +76,7 @@ def autoajustar_columnas(ws):
             ws.column_dimensions[col_letter].width = 30 if col_letter in ['E', 'F'] else 50
 
 # ==========================================
-# 2. PROCESAMIENTO Y ENTORNO ANALÍTICO
+# 2. FUNCIONES DE PROCESAMIENTO
 # ==========================================
 def procesar_balanza(file) -> pd.DataFrame:
     try:
@@ -108,7 +108,7 @@ def procesar_balanza(file) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
         return df
     except Exception as e:
-        st.error(f"❌ Error base: {str(e)}")
+        st.error(f"❌ Error al procesar: {str(e)}")
         return pd.DataFrame()
 
 def analizar_balanza(df: pd.DataFrame) -> pd.DataFrame:
@@ -145,7 +145,7 @@ def analizar_balanza(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 # ==========================================
-# 3. CONSTRUCCIÓN DE LA INTERFAZ UI
+# 3. INTERFAZ DE USUARIO PRINCIPAL
 # ==========================================
 st.sidebar.title("Configuración del Cliente")
 empresa = st.sidebar.text_input("Nombre de la Empresa", value="Empresa de Prueba SRL")
@@ -158,9 +158,7 @@ tasa_ref = 0.01 if tipo_entidad == "Comercial / Servicios" else 0.005
 porcentaje_mp = st.sidebar.slider("Porcentaje de Materialidad", 0.5, 3.0, tasa_ref * 100, step=0.1) / 100
 porcentaje_me = st.sidebar.slider("Porcentaje de Materialidad de Ejecución (ME)", 50, 75, 75, step=5) / 100
 
-st.dataframe(pd.DataFrame()) # Reset visual limpio
-
-uploaded_file = st.file_uploader("Upload Balanza", type=["xlsx", "csv"], label_visibility="collapsed")
+uploaded_file = st.file_uploader("Upload Balanza de Comprobación", type=["xlsx", "csv"], label_visibility="collapsed")
 
 if uploaded_file is not None:
     df_balanza = procesar_balanza(uploaded_file)
@@ -174,7 +172,7 @@ if uploaded_file is not None:
         me = mp * porcentaje_me
         
         st.markdown("---")
-        st.subheader(f"📌 Informe de Auditoría: {empresa} — Período: {periodo}")
+        st.subheader(f"📌 Informe de Auditoría Analítica: {empresa} — Período: {periodo}")
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Total Ingresos Declarados", f"RD$ {total_ingresos:,.2f}")
         c2.metric("Total Activos Registrados", f"RD$ {total_activos:,.2f}")
@@ -193,14 +191,14 @@ if uploaded_file is not None:
         with tab2:
             df_err = df_balanza[(df_balanza['validacion_naturaleza'] != "Correcto") & (df_balanza['validacion_naturaleza'] != "Ignorado")]
             if not df_err.empty:
-                st.error(f"Se detectaron {len(df_err)} cuentas con saldos contrarios a su naturaleza.")
+                st.error(f"Se detectaron {len(df_err)} cuentas con saldos inconsistentes.")
                 st.dataframe(df_err[['codigo', 'cuenta', 'saldo_final', 'validacion_naturaleza']], use_container_width=True)
             else:
                 st.success("✅ Excelente: No se han encontrado cuentas con inconsistencias.")
         with tab3:
             df_fisc = df_balanza[df_balanza['alerta_fiscal_rd'] != "Sin observaciones"]
             if not df_fisc.empty:
-                st.warning(f"Se identificaron {len(df_fisc)} cuentas con exposición a revisión fiscal del Art. 287.")
+                st.warning(f"Se identificaron {len(df_fisc)} cuentas con riesgo fiscal del Art. 287.")
                 st.dataframe(df_fisc[['codigo', 'cuenta', 'saldo_final', 'alerta_fiscal_rd']], use_container_width=True)
             else:
                 st.success("✅ Cumplimiento Inicial: No se detectaron alertas críticas.")
@@ -211,7 +209,7 @@ if uploaded_file is not None:
             df_ir2.columns = ['Renglón Formulario DGII', 'Monto Acumulado (RD$)']
             st.dataframe(df_ir2, use_container_width=True)
             
-        # --- PRE-CÁLCULO DE MOTORES MÓDULOS FISCALES ---
+        # --- EXTRACCIÓN Y CÁLCULOS FISCALES ---
         monto_ingresos_gravados = abs(df_balanza[df_balanza['codigo'].str.startswith('4', na=False)]['saldo_final'].sum())
         itbis_ventas_generado = monto_ingresos_gravados * TASA_ITBIS_GENERAL
         compras_y_gastos_base = abs(df_balanza[(df_balanza['codigo'].str.startswith(('5', '6'), na=False)) & (~df_balanza['cuenta'].str.lower().str.contains('personal|sueldo|salario|tss|infotep|percapita', na=False))]['saldo_final'].sum())
@@ -245,7 +243,7 @@ if uploaded_file is not None:
         total_ir17 = r_honorarios + r_reparaciones + r_vehiculos + r_renta + r_otras_ret + r_espana + r_canada + r_exterior
 
         with tab5:
-            st.markdown("### 🇩🇴 Liquidación de ITBIS (Anexo A + Formulario IT-1)")
+            st.markdown("### 🇩🇴 Módulo de Liquidación de ITBIS (Anexo A + Formulario IT-1)")
             if neto_itbis_resultado > 0:
                 st.error(f"🚨 **IMPUESTO NETO A PAGAR EN IT-1:** RD$ {neto_itbis_resultado:,.2f}")
             else:
@@ -262,10 +260,10 @@ if uploaded_file is not None:
             ws_anexo = wb_it1.active; ws_anexo.title = "Anexo_A_IT1"
             aplicar_estilos_base(ws_anexo, f"TAXTECH AUDITOR RD — ANEXO A DEL IT-1: {empresa.upper()}", "Desglose Analítico de Ingresos, Adelantos y Retenciones")
             
-            headers_anexo = ["Casilla", "Descripción del Concepto Operativo", "Monto Base Imponible", "ITBIS Liquidado / Retenido"]
-            for col_idx, h in enumerate(headers_anexo, start=2):
-                cell = ws_anexo.cell(row=5, column=col_idx, value=h)
-                cell.font = FONT_HEADER; cell.fill = FILL_HEADER; cell.border = CELL_BORDER
+            for col_idx, h in enumerate(["Casilla", "Descripción del Concepto Operativo", "Monto Base Imponible", "ITBIS Liquidado / Retenido"], start=2):
+                ws_anexo.cell(row=5, column=col_idx, value=h).font = FONT_HEADER
+                ws_anexo.cell(row=5, column=col_idx).fill = FILL_HEADER
+                ws_anexo.cell(row=5, column=col_idx).border = CELL_BORDER
                 
             datos_anexo = [
                 ("Casilla 1", "Ingresos por Operaciones Locales Gravadas (Ventas)", monto_ingresos_gravados, itbis_ventas_generado),
@@ -289,8 +287,9 @@ if uploaded_file is not None:
             ws_form = wb_it1.create_sheet(title="Formulario_IT1")
             aplicar_estilos_base(ws_form, f"TAXTECH AUDITOR RD — FORMULARIO IT-1: {empresa.upper()}", "Liquidación Final del Impuesto")
             for col_idx, h in enumerate(["Línea", "Renglón Final IT-1", "Fórmula de Amarre", "Monto Relacionado"], start=2):
-                cell = ws_form.cell(row=5, column=col_idx, value=h)
-                cell.font = FONT_HEADER; cell.fill = FILL_HEADER; cell.border = CELL_BORDER
+                ws_form.cell(row=5, column=col_idx, value=h).font = FONT_HEADER
+                ws_form.cell(row=5, column=col_idx).fill = FILL_HEADER
+                ws_form.cell(row=5, column=col_idx).border = CELL_BORDER
                 
             datos_form = [
                 ("Línea 1", "Total ITBIS Bruto por Operaciones", "=Anexo_A_IT1!E6", "=Anexo_A_IT1!E6"),
@@ -329,14 +328,16 @@ if uploaded_file is not None:
             cp3.metric("Seguro Riesgos Laborales (1.20%)", f"RD$ {gasto_nominas_global * TASA_SRL_PROMEDIO:,.2f}")
             cp4.metric("Aporte INFOTEP (1.00%)", f"RD$ {gasto_nominas_global * TASA_INFOTEP:,.2f}")
             
+            # --- CORRECCIÓN EN EL PARENTESIS DE LA FILA 354 EN ADELANTE ---
             buffer_tss = io.BytesIO()
             wb_tss = openpyxl.Workbook()
             ws_tss = wb_tss.active; ws_tss.title = "Liquidación TSS"
             aplicar_estilos_base(ws_tss, f"TAXTECH AUDITOR RD — CONTROL DE NÓMINA: {empresa.upper()}", "Carga Masiva de Aportes Patronales y Retenciones TSS / IR-3")
             
             for col_idx, h in enumerate(["Tipo Componente", "Concepto de Retención o Aporte", "Porcentaje", "Monto Autocalculado"], start=2):
-                cell = ws_tss.cell(row=5, column=col_idx, value=h)
-                cell.font = FONT_HEADER; cell.fill = FILL_HEADER; cell.border = CELL_BORDER
+                ws_tss.cell(row=5, column=col_idx, value=h).font = FONT_HEADER
+                ws_tss.cell(row=5, column=col_idx).fill = FILL_HEADER
+                ws_tss.cell(row=5, column=col_idx).border = CELL_BORDER
                 
             datos_tss = [
                 ("Patronal", "Seguro Familiar de Salud (SFS Patronal)", 0.0709, gasto_nominas_global * 0.0709),
@@ -351,4 +352,39 @@ if uploaded_file is not None:
             for idx, (tipo, con, por, mnt) in enumerate(datos_tss):
                 r_idx = 6 + idx
                 ws_tss.cell(row=r_idx, column=2, value=tipo).alignment = Alignment(horizontal="center")
-                ws_tss.cell(
+                ws_tss.cell(row=r_idx, column=3, value=con)
+                ws_tss.cell(row=r_idx, column=4, value=por).number_format = '0.00%'
+                ws_tss.cell(row=r_idx, column=5, value=mnt).number_format = 'RD$ #,##0.00'
+                for c in range(2, 6):
+                    cell = ws_tss.cell(row=r_idx, column=c)
+                    cell.font = FONT_BODY if tipo != "TOTAL" else FONT_BOLD
+                    cell.border = CELL_BORDER
+                    if idx % 2 == 1 and tipo != "TOTAL": cell.fill = FILL_ZEBRA
+                    if tipo == "TOTAL": cell.fill = FILL_TOTAL
+            autoajustar_columnas(ws_tss)
+            wb_tss.save(buffer_tss)
+            st.download_button("📥 Descargar Plantilla Auxiliar TSS (Excel)", data=buffer_tss.getvalue(), file_name=f"Plantilla_TSS_{empresa.replace(' ', '_')}.xlsx")
+
+        with tab7:
+            st.markdown("### 💸 Formulario IR-17: Declaración Jurada de Otras Retenciones")
+            st.error(f"💸 **TOTAL IMPUESTO A PAGAR (IR-17):** RD$ {total_ir17:,.2f}")
+            
+            df_ir17_pantalla = pd.DataFrame({
+                'Casilla': ['Casilla 1', 'Casilla 2', 'Casilla 8', 'Casilla 9', 'Casilla 10', 'Casilla 15', 'Casilla 16', 'Casilla 17'],
+                'Concepto Oficial': [
+                    'Honorarios por Servicios Profesionales', 'Otras Rentas / Servicios Técnicos y Reparaciones',
+                    'Retribuciones Complementarias - Vehículos', 'Retribuciones Complementarias - Alquileres',
+                    'Retribuciones Complementarias - Otros', 'Remesas - España', 'Remesas - Canadá', 'Remesas - General'
+                ],
+                'Tasa': ['10%', '2%', '27%', '27%', '27%', '10%', '18%', '27%'],
+                'Base Imponible': [b_honorarios, b_reparaciones, b_vehiculos, b_renta_vivienda, b_otras_retribuciones, b_espana, b_canada, b_exterior_general],
+                'Impuesto Retenido': [r_honorarios, r_reparaciones, r_vehiculos, r_renta, r_otras_ret, r_espana, r_canada, r_exterior]
+            })
+            st.dataframe(df_ir17_pantalla.style.format({'Base Imponible': 'RD$ {:,.2f}', 'Impuesto Retenido': 'RD$ {:,.2f}'}), use_container_width=True, hide_index=True)
+
+            buffer_ir17 = io.BytesIO()
+            wb_ir17 = openpyxl.Workbook()
+            ws_ir17 = wb_ir17.active; ws_ir17.title = "Borrador IR-17"
+            aplicar_estilos_base(ws_ir17, f"TAXTECH AUDITOR RD — RESUMEN IR-17: {empresa.upper()}", "Borrador de Casillas Oficiales del Formulario IR-17 de la DGII")
+            
+            for col_idx, h in enumerate(
