@@ -57,9 +57,9 @@ def procesar_balanza(file) -> pd.DataFrame:
         df['codigo'] = df['codigo'].apply(lambda x: x.split('.')[0] if '.' in x else x)
         df['cuenta'] = df['cuenta'].fillna('').astype(str).str.strip()
         
-        # Filtrar y eliminar filas de totales o vacías para que no alteren las sumas de las métricas
-        df = df[~df['codigo'].str.lower().contains('total|resultado|suma', na=False)]
-        df = df[~df['cuenta'].str.lower().contains('total|resultado|suma', na=False)]
+        # CORRECCIÓN: Uso correcto de .str.contains() en Pandas para omitir filas de totales
+        df = df[~df['codigo'].str.lower().str.contains('total|resultado|suma', na=False)]
+        df = df[~df['cuenta'].str.lower().str.contains('total|resultado|suma', na=False)]
         df = df[df['codigo'] != '']
         
         for col in ['debito', 'credito', 'saldo_final']:
@@ -180,7 +180,6 @@ if uploaded_file is not None:
             
         with tab2:
             st.markdown("### Cuentas con Saldos Fuera de su Naturaleza Contable")
-            # Excluimos las líneas marcadas como Ignoradas para la vista de errores
             df_errores = df_balanza[(df_balanza['validacion_naturaleza'] != "Correcto") & (df_balanza['validacion_naturaleza'] != "Ignorado")]
             if not df_errores.empty:
                 st.error(f"Se detectaron {len(df_errores)} cuentas con saldos contrarios a su dinámica operativa contable.")
