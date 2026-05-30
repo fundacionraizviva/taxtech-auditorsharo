@@ -65,12 +65,21 @@ CELL_BORDER = Border(left=BORDER_THIN, right=BORDER_THIN, top=BORDER_THIN, botto
 # ==========================================
 # 2. FUNCIONES DE AYUDA RENDERIZADO EXCEL
 # ==========================================
-def armar_encabezado_excel(ws, titulo, subtitulo, headers):
+def aplicar_estilos_base(ws, titulo, subtitulo):
     ws.views.sheetView[0].showGridLines = True
     ws["B2"] = titulo
     ws["B2"].font = FONT_TITLE
     ws["B3"] = subtitulo
     ws["B3"].font = Font(name="Calibri", size=11, italic=True)
+
+def autoajustar_columnas(ws):
+    for col in ws.columns:
+        col_letter = get_column_letter(col[0].column)
+        if col_letter != 'A':
+            ws.column_dimensions[col_letter].width = 30 if col_letter in ['E', 'F'] else 50
+
+def armar_encabezado_excel(ws, titulo, subtitulo, headers):
+    aplicar_estilos_base(ws, titulo, subtitulo)
     for col_idx, text in enumerate(headers, start=2):
         cell = ws.cell(row=5, column=col_idx, value=text)
         cell.font = FONT_HEADER; cell.fill = FILL_HEADER; cell.border = CELL_BORDER
@@ -263,7 +272,6 @@ if uploaded_file is not None:
             else:
                 st.success(f"🎉 **SALDO A FAVOR COMPENSABLE:** RD$ {abs(neto_itbis_resultado):,.2f}")
                 
-            # --- DESGLOSE EN PANTALLA IT-1 ---
             df_it1_pantalla = pd.DataFrame({
                 'Línea / Casilla': ['Línea 1', 'Línea 2', 'Línea 3', 'Línea 4', 'Línea 5', 'Línea 6'],
                 'Concepto Operativo': ['Total Ventas Declaradas', 'ITBIS Bruto Generado (18%)', '(-) Adelanto ITBIS Compras (606)', '(-) ITBIS Retenido Personas Físicas', '(-) ITBIS Retenido Personas Jurídicas', '(-) Retención Tarjetas (2% Norma 08-04)'],
@@ -304,7 +312,7 @@ if uploaded_file is not None:
             
             num_dependientes_estimados = round(gasto_per_capita_balanza / COSTO_PER_CAPITA_2026) if gasto_per_capita_balanza > 0 else 0
             
-            # --- REINYECCIÓN DEL DESGLOSE EN PANTALLA TSS ---
+            # --- CORREGIDO: Línea limpia sin variables mutadas rotas ---
             df_tss_pantalla = pd.DataFrame({
                 'Cédula': ['001-XXXXXXX-1', '001-XXXXXXX-2', '001-XXXXXXX-3'],
                 'Nombre Empleado': ['Personal Operativo A', 'Personal Administrativo B', 'Dirección / Gerencia C'],
@@ -315,11 +323,11 @@ if uploaded_file is not None:
             df_tss_pantalla['AFP Empleado (2.87%)'] = df_tss_pantalla['Sueldo Cotizable'] * TASA_AFP_EMPLEADO
             df_tss_pantalla['Percápita Dependientes'] = df_tss_pantalla['Dependientes Adicionales'] * COSTO_PER_CAPITA_2026
             df_tss_pantalla['SFS Patronal (7.09%)'] = df_tss_pantalla['Sueldo Cotizable'] * TASA_SFS_PATRONAL
-            df_tss_pantalla['AFP Patronal (7.10%)'] = df_tss_pantarma = df_tss_pantalla['Sueldo Cotizable'] * TASA_AFP_PATRONAL
+            df_tss_pantalla['AFP Patronal (7.10%)'] = df_tss_pantalla['Sueldo Cotizable'] * TASA_AFP_PATRONAL
             df_tss_pantalla['SRL Patronal (1.20%)'] = df_tss_pantalla['Sueldo Cotizable'] * TASA_SRL_PROMEDIO
             df_tss_pantalla['INFOTEP Patronal (1.00%)'] = df_tss_pantalla['Sueldo Cotizable'] * TASA_INFOTEP
             
-            st.markdown("##### 📋 Desglose Analítico por Empleado (Simulado / Cargado)")
+            st.markdown("##### 📋 Desglose Analítico por Empleado (Padrón TSS)")
             st.dataframe(df_tss_pantalla.style.format({
                 'Sueldo Cotizable': 'RD$ {:,.2f}', 'SFS Empleado (3.04%)': 'RD$ {:,.2f}', 'AFP Empleado (2.87%)': 'RD$ {:,.2f}',
                 'Percápita Dependientes': 'RD$ {:,.2f}', 'SFS Patronal (7.09%)': 'RD$ {:,.2f}', 'AFP Patronal (7.10%)': 'RD$ {:,.2f}',
@@ -347,7 +355,6 @@ if uploaded_file is not None:
             st.markdown("### 💸 Formulario IR-17: Declaración Jurada de Otras Retenciones")
             st.error(f"💸 **TOTAL IMPUESTO A PAGAR (IR-17):** RD$ {total_ir17:,.2f}")
             
-            # --- REINYECCIÓN DEL DESGLOSE EN PANTALLA IR-17 ---
             df_ir17_pantalla = pd.DataFrame({
                 'Casilla': ['Casilla 1', 'Casilla 2', 'Casilla 8', 'Casilla 9', 'Casilla 10', 'Casilla 15', 'Casilla 16', 'Casilla 17'],
                 'Concepto Oficial DGII': [
@@ -374,3 +381,38 @@ if uploaded_file is not None:
                 ("Casilla 10", "Retribuciones Complementarias - Otros Beneficios en Especie", 0.27, b_otras_retribuciones),
                 ("Casilla 15", "Remesas al Exterior - Convenio Doble Imposición España", 0.10, b_espana),
                 ("Casilla 16", "Remesas al Exterior - Convenio Doble Imposición Canadá", 0.18, b_canada),
+                ("Casilla 17", "Remesas al Exterior - Otras Rentas de Fuente Dominicana (General)", 0.27, b_exterior_general)
+            ]
+            escribir_datos_excel(ws_ir17, 6, datos_ir17, "TOTAL", [5, 6])
+            wb_ir17.save(buffer_ir17)
+            st.download_button("📥 Descargar Borrador Resumido IR-17 (Excel)", data=buffer_ir17.getvalue(), file_name=f"Borrador_Resumido_IR17_{empresa.replace(' ', '_')}.xlsx")
+            
+        with tab8:
+            st.markdown("### 🏛️ Consolidado Fiscal General del Periodo")
+            itbis_caja = neto_itbis_resultado if neto_itbis_resultado > 0 else 0.0
+            gran_total_periodo_pagar = itbis_caja + total_liquidacion_ir3_tss + total_ir17
+            st.warning(f"🏦 **EFECTIVO TOTAL ESTIMADO A TRANSFERIR (DGII / TSS):** RD$ {gran_total_periodo_pagar:,.2f}")
+            
+            df_con_pantalla = pd.DataFrame({
+                'Formulario Oficial': ['Formulario IT-1', 'Tesorería TSS', 'Formulario IR-3', 'Formulario IR-17'],
+                'Módulo de Control': ['Módulo de ITBIS / Formatos 606 y 607', 'Seguridad Social Costo Empresa', 'Retenciones Empleados Nómina', 'Retenciones Locales e Internacionales'],
+                'Estado de Cuenta': ['Saldo a Pagar' if neto_itbis_resultado > 0 else 'Saldo a Favor', 'Costo Operativo', 'Pasivo de Retención', 'Impuesto Retenido'],
+                'Monto Identificado': [itbis_caja, costo_patronal_total, retenciones_empleados_total, total_ir17]
+            })
+            st.dataframe(df_con_pantalla.style.format({'Monto Identificado': 'RD$ {:,.2f}'}), use_container_width=True, hide_index=True)
+
+            buffer_con = io.BytesIO()
+            wb_con = openpyxl.Workbook()
+            ws_con = wb_con.active; ws_con.title = "Consolidado Fiscal"
+            armar_encabezado_excel(ws_con, f"TAXTECH AUDITOR RD — VOLANTE DE CONSOLIDACIÓN", "Resumen Maestro de Caja", ["Formulario Oficial", "Origen / Módulo", "Estado de Cuenta", "Monto Neto Determinado"])
+            datos_con = [
+                ("Formulario IT-1", "Módulo de ITBIS / 606 / 607", "Saldo a Pagar" if neto_itbis_resultado > 0 else "Saldo a Favor", itbis_caja),
+                ("Tesorería TSS", "Seguridad Social Patronal", "Costo Operativo", costo_patronal_total),
+                ("Formulario IR-3", "Retenciones Empleados Nómina", "Pasivo de Retención", retenciones_empleados_total),
+                ("Formulario IR-17", "Retenciones Locales / Exterior", "Impuesto Retenido", total_ir17)
+            ]
+            escribir_datos_excel(ws_con, 6, datos_con, "TOTAL GENERAL", [5])
+            wb_con.save(buffer_con)
+            st.download_button("📥 Descargar Volante Consolidado de Caja (Excel)", data=buffer_con.getvalue(), file_name=f"Consolidado_Fiscal_General_{empresa.replace(' ', '_')}.xlsx")
+else:
+    st.info("👋 Por favor, carga tu archivo de Balanza de Comprobación para desplegar los cálculos automáticos.")
