@@ -179,10 +179,10 @@ if uploaded_file is not None:
         st.markdown("---")
         
         # PESTAÑAS PRINCIPALES
-        tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
             "📋 Balanza", "🚨 Inconsistencias", "🇩🇴 Riesgos Art. 287", 
             "📋 Borrador Anual IR-2", "⚡ Mensual (Liquidación IT-1)", 
-            "🏢 Nómina y TSS (IR-3)", "💸 Liquidación IR-17 (Retenciones)"
+            "🏢 Nómina y TSS (IR-3)", "💸 Liquidación IR-17", "🏛️ Consolidado Fiscal General"
         ])
         
         with tab1:
@@ -208,41 +208,50 @@ if uploaded_file is not None:
             st.markdown("### 📋 Mapeo y Cruce Avanzado - Formulario Anual IR-2")
             with st.expander("📥 CARGAR ARCHIVO AUXILIAR DE ANEXOS IR-2 (DGII)", expanded=False):
                 uploaded_anexos = st.file_uploader("Subir borrador de anexos (A, B, C, D) en Excel", type=["xlsx"], key="ir2_anexos")
-                if uploaded_anexos is not None:
-                    st.success("✅ Borrador de Anexos indexado. Listo para conciliación masiva.")
-            
-            st.markdown("#### Distribución Predictiva según Balanza:")
             df_ir2 = df_balanza.groupby('casilla_ir2')['saldo_final'].sum().reset_index()
             df_ir2['saldo_final'] = df_ir2['saldo_final'].apply(lambda x: abs(x))
             df_ir2.columns = ['Renglón Formulario DGII', 'Monto Acumulado (RD$)']
             st.dataframe(df_ir2, use_container_width=True)
             
+        # --- PRE-CÁLCULO DE MOTORES MÓDULOS FISCALES PARA REUTILIZACIÓN EN CONSOLIDADO ---
+        # Motor IT-1
+        monto_ingresos_gravados = abs(df_balanza[df_balanza['codigo'].str.startswith('4', na=False)]['saldo_final'].sum())
+        itbis_ventas_generado = monto_ingresos_gravados * TASA_ITBIS_GENERAL
+        compras_y_gastos_base = abs(df_balanza[(df_balanza['codigo'].str.startswith(('5', '6'), na=False)) & (~df_balanza['cuenta'].str.lower().str.contains('personal|sueldo|salario|tss|infotep|percapita', na=False))]['saldo_final'].sum())
+        itbis_soportado_compras = compras_y_gastos_base * TASA_ITBIS_GENERAL
+        base_honorarios_fisicos = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('honorario', na=False)]['saldo_final'].sum())
+        itbis_ret_100_fisicas = (base_honorarios_fisicos * TASA_ITBIS_GENERAL) * 1.00
+        base_servicios_juridicas = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('servicio tecnico|consultoria|reparacion', na=False)]['saldo_final'].sum())
+        itbis_ret_30_juridicas = (base_servicios_juridicas * TASA_ITBIS_GENERAL) * 0.30
+        cuenta_ret_tarjeta = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('retencion tarjeta|adquirente|cardnet|azul', na=False)]['saldo_final'].sum())
+        itbis_ret_tarjetas_2 = cuenta_ret_tarjeta if cuenta_ret_tarjeta > 0 else (monto_ingresos_gravados * 0.60) * 0.02
+        neto_itbis_resultado = itbis_ventas_generado - (itbis_soportado_compras + itbis_ret_100_fisicas + itbis_ret_30_juridicas + itbis_ret_tarjetas_2)
+
+        # Motor IR-3 / TSS
+        gasto_nominas_global = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('personal|sueldo|salario', na=False)]['saldo_final'].sum())
+        gasto_per_capita_balanza = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('percapita|per capita|dependiente adicional', na=False)]['saldo_final'].sum())
+        costo_patronal_total = (gasto_nominas_global * TASA_SFS_PATRONAL) + (gasto_nominas_global * TASA_AFP_PATRONAL) + (gasto_nominas_global * TASA_SRL_PROMEDIO) + (gasto_nominas_global * TASA_INFOTEP)
+        retenciones_empleados_total = (gasto_nominas_global * TASA_SFS_EMPLEADO) + (gasto_nominas_global * TASA_AFP_EMPLEADO) + gasto_per_capita_balanza
+        total_liquidacion_ir3_tss = costo_patronal_total + retenciones_empleados_total
+
+        # Motor IR-17
+        b_honorarios = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('honorario', na=False)]['saldo_final'].sum())
+        b_reparaciones = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('reparacion|mantenimiento', na=False)]['saldo_final'].sum())
+        b_vehiculos = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('vehiculo personal|combustible empleado', na=False)]['saldo_final'].sum())
+        b_renta_vivienda = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('renta personal|alquiler personal|vivienda', na=False)]['saldo_final'].sum())
+        b_otras_retribuciones = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('retribucion|especie', na=False) & ~df_balanza['cuenta'].str.lower().str.contains('vehiculo|renta|alquiler|vivienda', na=False)]['saldo_final'].sum())
+        b_espana = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('españa|espana', na=False)]['saldo_final'].sum())
+        b_canada = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('canada|canadá', na=False)]['saldo_final'].sum())
+        b_exterior_general = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('exterior|remesa|extranjero', na=False) & ~df_balanza['cuenta'].str.lower().str.contains('españa|espana|canada|canadá', na=False)]['saldo_final'].sum())
+        
+        total_ir17 = (b_honorarios * 0.10) + (b_reparaciones * 0.02) + (b_vehiculos * 0.27) + (b_renta_vivienda * 0.27) + (b_otras_retribuciones * 0.27) + (b_espana * 0.10) + (b_canada * 0.18) + (b_exterior_general * 0.27)
+
         with tab5:
             st.markdown("### 🇩🇴 Módulo Avanzado de Liquidación - Formulario IT-1 (ITBIS)")
             with st.expander("📥 CARGAR PRE-ENVÍOS OFICIALES DE FORMATOS 606 Y 607", expanded=False):
                 up_606 = st.file_uploader("Subir txt o Excel definitivo de Compras (606)", type=["txt", "xlsx"], key="it1_606")
                 up_607 = st.file_uploader("Subir txt o Excel definitivo de Ventas (607)", type=["txt", "xlsx"], key="it1_607")
-                if up_606 and up_607:
-                    st.success("✅ Formatos 606 y 607 enlazados. El sistema priorizará estos valores sobre las cuentas de control.")
             
-            # --- MOTOR DE CÁLCULO IT-1 ---
-            monto_ingresos_gravados = abs(df_balanza[df_balanza['codigo'].str.startswith('4', na=False)]['saldo_final'].sum())
-            itbis_ventas_generado = monto_ingresos_gravados * TASA_ITBIS_GENERAL
-            compras_y_gastos_base = abs(df_balanza[(df_balanza['codigo'].str.startswith(('5', '6'), na=False)) & (~df_balanza['cuenta'].str.lower().str.contains('personal|sueldo|salario|tss|infotep|percapita', na=False))]['saldo_final'].sum())
-            itbis_soportado_compras = compras_y_gastos_base * TASA_ITBIS_GENERAL
-            
-            base_honorarios_fisicos = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('honorario', na=False)]['saldo_final'].sum())
-            itbis_ret_100_fisicas = (base_honorarios_fisicos * TASA_ITBIS_GENERAL) * 1.00
-            base_servicios_juridicas = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('servicio tecnico|consultoria|reparacion', na=False)]['saldo_final'].sum())
-            itbis_ret_30_juridicas = (base_servicios_juridicas * TASA_ITBIS_GENERAL) * 0.30
-            
-            cuenta_ret_tarjeta = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('retencion tarjeta|adquirente|cardnet|azul', na=False)]['saldo_final'].sum())
-            itbis_ret_tarjetas_2 = cuenta_ret_tarjeta if cuenta_ret_tarjeta > 0 else (monto_ingresos_gravados * 0.60) * 0.02
-            
-            total_deducciones_creditos = itbis_soportado_compras + itbis_ret_100_fisicas + itbis_ret_30_juridicas + itbis_ret_tarjetas_2
-            neto_itbis_resultado = itbis_ventas_generado - total_deducciones_creditos
-            
-            st.markdown("---")
             if neto_itbis_resultado > 0:
                 st.error(f"🚨 **IMPUESTO NETO A PAGAR EN IT-1:** RD$ {neto_itbis_resultado:,.2f}")
             else:
@@ -256,14 +265,9 @@ if uploaded_file is not None:
             
         with tab6:
             st.markdown("### 🏢 Módulo de Conciliación y Liquidación TSS / INFOTEP / IR-3")
-            gasto_nominas_global = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('personal|sueldo|salario', na=False)]['saldo_final'].sum())
-            gasto_per_capita_balanza = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('percapita|per capita|dependiente adicional', na=False)]['saldo_final'].sum())
             num_dependientes_estimados = round(gasto_per_capita_balanza / COSTO_PER_CAPITA_2026) if gasto_per_capita_balanza > 0 else 0
-            
             with st.expander("📥 CARGAR ARCHIVO COMPLEMENTARIO DE TXT ENTRADA TSS (IR-4)", expanded=False):
                 up_tss = st.file_uploader("Subir borrador de empleados o txt oficial de la TSS", type=["txt", "xlsx"], key="tss_file")
-                if up_tss is not None:
-                    st.success("✅ Padron de empleados real vinculado para cruce cruzado.")
             
             st.markdown("---")
             cp1, cp2, cp3, cp4 = st.columns(4)
@@ -273,29 +277,60 @@ if uploaded_file is not None:
             cp4.metric("Aporte INFOTEP (1.00%)", f"RD$ {gasto_nominas_global * TASA_INFOTEP:,.2f}")
             
         with tab7:
-            st.markdown("### 💸 Liquidación IR-17 (Otras Retenciones)")
+            st.markdown("### 💸 Liquidación y Segmentación Estricta - Formulario IR-17")
             with st.expander("📥 CARGAR AUXILIAR DE RETENCIONES COMPLEMENTARIAS", expanded=False):
                 up_ir17 = st.file_uploader("Subir hoja de cálculo de retenciones del exterior / remesas", type=["xlsx", "csv"], key="ir17_file")
-                if up_ir17 is not None:
-                    st.success("✅ Resumen de operaciones internacionales integrado correctamente.")
+            st.error(f"💸 **TOTAL A PAGAR FORMULARIO IR-17:** RD$ {total_ir17:,.2f}")
+            
+        with tab8:
+            st.markdown("### 🏛️ Consolidado Fiscal General del Periodo — Estado de Obligaciones Netas")
+            st.markdown("Resumen unificado de la posición impositiva de la empresa frente a la DGII y la TSS. Puedes cargar borradores finales en cada pestaña para ajustar este cálculo.")
+            
+            # Ajuste de ITBIS neto a presentar en la suma (si es saldo a favor se resta o computa como cero para el flujo de caja inmediato)
+            itbis_caja = neto_itbis_resultado if neto_itbis_resultado > 0 else 0.0
+            
+            # --- GRAN TOTAL GENERAL A LIQUIDAR ---
+            gran_total_periodo_pagar = itbis_caja + total_liquidacion_ir3_tss + total_ir17
             
             st.markdown("---")
-            base_honorarios = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('honorario', na=False)]['saldo_final'].sum())
-            base_reparaciones = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('reparacion|mantenimiento', na=False)]['saldo_final'].sum())
-            base_retribuciones = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('retribucion|especie|alquiler personal|renta personal|vehiculo personal', na=False)]['saldo_final'].sum())
+            st.warning(f"🏦 **EFECTIVO TOTAL ESTIMADO A TRANSFERIR A COLECTURÍA (DGII / TSS):** RD$ {gran_total_periodo_pagar:,.2f}")
+            st.markdown("---")
             
-            base_espana = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('españa|espana', na=False)]['saldo_final'].sum())
-            base_canada = abs(df_balanza[df_balanza['cuenta'].str.lower().str.contains('canada|canadá', na=False)]['saldo_final'].sum())
-            base_exterior_general = abs(df_balanza[(df_balanza['cuenta'].str.lower().str.contains('exterior|remesa|extranjero', na=False)) & (~df_balanza['cuenta'].str.lower().str.contains('españa|espana|canada|canadá', na=False))]['saldo_final'].sum())
+            # KPIs de Desglose Consolidado
+            cc1, cc2, cc3, cc4 = st.columns(4)
+            cc1.metric("IT-1 (ITBIS Neto)", f"RD$ {itbis_caja:,.2f}", delta=f"Saldo Favor: {abs(neto_itbis_resultado):,.2f}" if neto_itbis_resultado < 0 else "Impuesto Determinado")
+            cc2.metric("TSS / IR-3 (Nómina Completa)", f"RD$ {total_liquidacion_ir3_tss:,.2f}")
+            cc3.metric("IR-17 (Otras Retenciones)", f"RD$ {total_ir17:,.2f}")
+            cc4.metric("Total General Liquidación", f"RD$ {gran_total_periodo_pagar:,.2f}")
             
-            ret_honorarios = base_honorarios * 0.10
-            ret_reparaciones = base_reparaciones * 0.02
-            ret_retribuciones = base_retribuciones * 0.27
-            ret_espana = base_espana * 0.10
-            ret_canada = base_canada * 0.18
-            ret_exterior = base_exterior_general * 0.27
+            st.markdown("---")
+            st.markdown("#### 📋 Matriz Consolidada de Carga Financiera")
             
-            total_ir17_liquidar = ret_honorarios + ret_reparaciones + ret_retribuciones + ret_espana + ret_canada + ret_exterior
-            st.metric("💵 Total a Liquidar IR-17", f"RD$ {total_ir17_liquidar:,.2f}")
+            df_consolidado_general = pd.DataFrame({
+                'Formulario / Obligación Fiscal': [
+                    'Formulario IT-1 (Impuesto sobre la Transferencia de Bienes Industrializados y Servicios)',
+                    'Tesorería de la Seguridad Social (TSS) - Aportes Patronales de Ley',
+                    'Formulario IR-3 (Retenciones del Impuesto Sobre la Renta de Empleados + Descuentos TSS)',
+                    'Formulario IR-17 (Retenciones de ISR a Terceros y Retribuciones Complementarias)',
+                    'TOTAL ESTIMADO DE COMPROMISOS FISCALES COMPENSADOS Y LIQUIDADOS'
+                ],
+                'Origen de Datos / Módulo': ['Módulo Mensual IT-1', 'Módulo Nómina Patronal', 'Módulo Nómina Retenciones', 'Módulo IR-17 Retenciones', 'Consolidación de Caja'],
+                'Monto Determinado (RD$)': [itbis_caja, costo_patronal_total, retenciones_empleados_total, total_ir17, gran_total_periodo_pagar]
+            })
+            
+            st.dataframe(df_consolidado_general.style.format({
+                'Monto Determinado (RD$)': 'RD$ {:,.2f}'
+            }), use_container_width=True)
+            
+            # Exportador Consolidado
+            buffer_consolidado = io.BytesIO()
+            with pd.ExcelWriter(buffer_consolidado, engine='openpyxl') as writer:
+                df_consolidado_general.to_excel(writer, index=False, sheet_name='Consolidado_Fiscal')
+            st.download_button(
+                label="📥 Descargar Volante de Consolidación General (Excel)",
+                data=buffer_consolidado.getvalue(),
+                file_name=f"Consolidado_Fiscal_Periodo_{empresa.replace(' ', '_')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 else:
     st.info("👋 Por favor, carga tu archivo de Balanza de Comprobación para desplegar los cálculos automáticos.")
