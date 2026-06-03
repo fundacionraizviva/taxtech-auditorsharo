@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="es" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fundación Raíz Viva | Higüey</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brandGray: { DEFAULT: '#494949', dark: '#353535', ultraDark: '#222222' },
+                        brandBlue: { DEFAULT: '#2D8CBF' },
+                        brandGreen: { DEFAULT: '#128230' },
+                        brandPink: { DEFAULT: '#E78895' }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { background-color: #494949; font-family: 'Inter', sans-serif; }
+        .glass-card { background: rgba(53, 53, 53, 0.7); backdrop-filter: blur(8px); border: 1px solid rgba(255, 255, 255, 0.05); }
+    </style>
+</head>
+<body class="text-white antialiased">
+
+    <!-- HEADER -->
+    <header class="bg-brandGray-dark shadow-lg sticky top-0 z-40 border-b border-white/10">
+        <div class="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 bg-brandGreen rounded-full flex items-center justify-center font-bold">RV</div>
+                <h1 class="text-xl font-bold tracking-tight">Fundación Raíz Viva</h1>
+            </div>
+            <nav class="hidden md:flex gap-8 text-sm font-medium text-gray-300">
+                <a href="#inicio" class="hover:text-white transition">Inicio</a>
+                <a href="#entregas" class="hover:text-white transition">Nuestras Entregas</a>
+                <a href="#contacto" class="hover:text-white transition">Contacto</a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 py-12">
+        <!-- HERO -->
+        <section id="inicio" class="text-center py-20">
+            <h2 class="text-5xl font-extrabold mb-6">Sembrando esperanza en <span class="text-brandGreen">Higüey</span></h2>
+            <p class="text-xl text-gray-300 max-w-2xl mx-auto mb-10">Trabajamos incansablemente para llevar apoyo directo a nuestra comunidad, fortaleciendo nuestras raíces sociales.</p>
+        </section>
+
+        <!-- GRID DE ENTREGAS -->
+        <section id="entregas" class="py-12">
+            <h2 class="text-3xl font-bold mb-10 text-center">Nuestras Entregas en Acción</h2>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div class="glass-card p-2 rounded-xl"><img src="entrega-1.jpeg" class="rounded-lg w-full h-64 object-cover" alt="[Imagen de entrega de ayuda 1]"></div>
+                <div class="glass-card p-2 rounded-xl"><img src="entrega-2.jpeg" class="rounded-lg w-full h-64 object-cover" alt="[Imagen de entrega de ayuda 2]"></div>
+                <div class="glass-card p-2 rounded-xl"><img src="entrega-3.jpeg" class="rounded-lg w-full h-64 object-cover" alt="[Imagen de entrega de ayuda 3]"></div>
+                <div class="glass-card p-2 rounded-xl"><img src="entrega-4.jpeg" class="rounded-lg w-full h-64 object-cover" alt="[Imagen de entrega de ayuda 4]"></div>
+                <div class="glass-card p-2 rounded-xl"><img src="entrega-5.jpeg" class="rounded-lg w-full h-64 object-cover" alt="[Imagen de entrega de ayuda 5]"></div>
+                <div class="glass-card p-2 rounded-xl"><img src="entrega-6.jpeg" class="rounded-lg w-full h-64 object-cover" alt="[Imagen de entrega de ayuda 6]"></div>
+            </div>
+        </section>
+    </main>
+
+    <!-- FOOTER -->
+    <footer class="text-center py-10 bg-brandGray-ultraDark text-gray-400 text-sm border-t border-white/5">
+        <p>&copy; 2026 Fundación Raíz Viva. Higüey, Rep. Dom.</p>
+    </footer>
+
+    <script>
+        lucide.createIcons();
+    </script>
+</body>
+</html>
