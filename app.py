@@ -102,48 +102,88 @@ def xl_money(cell, value):
     cell.font = FNT_BODY; cell.border = BRD
 
 # ──────────────────────────────────────────────────────────────────────────────
-# PROCESAMIENTO DE BALANZA
+# PROCESAMIENTO DE BALANZA (SOPORTE MULTI-NIVEL Y COLUMNAS DUPLICADAS)
 # ──────────────────────────────────────────────────────────────────────────────
 def procesar_balanza(file) -> pd.DataFrame:
     try:
+        # 1. Leer archivo sin asumir que la fila 0 es el encabezado
         if file.name.lower().endswith('.xlsx'):
-            df = pd.read_excel(file, engine='openpyxl')
+            df_raw = pd.read_excel(file, engine='openpyxl', header=None)
         elif file.name.lower().endswith('.xls'):
-            df = pd.read_excel(file, engine='xlrd')
+            df_raw = pd.read_excel(file, engine='xlrd', header=None)
         else:
-            df = pd.read_csv(file)
-        df.columns = [str(c).strip().lower() for c in df.columns]
-        mapeo = {}
-        for col in df.columns:
-            if any(x in col for x in ['código', 'codigo', 'cuenta no', 'no.', 'cuenta_no', 'cta']):
-                mapeo[col] = 'codigo'
-            elif any(x in col for x in ['nombre', 'descripción', 'descripcion', 'concepto']) and 'codigo' not in col:
-                mapeo[col] = 'cuenta'
-            elif 'cuenta' in col and 'codigo' not in col and 'cuenta' not in mapeo.values():
-                mapeo[col] = 'cuenta'
+            df_raw = pd.read_csv(file, header=None)
+        
+        # 2. Buscar dinámicamente la fila que contiene los nombres de columnas
+        header_idx = 0
+        for idx, row in df_raw.iterrows():
+            row_str = ' '.join([str(x).lower() for x in row.values])
+            if ('código' in row_str or 'codigo' in row_str) and ('nombre' in row_str or 'cuenta' in row_str):
+                header_idx = idx
+                break
+        
+        # 3. Asignar los encabezados y aislar los datos
+        column_names = df_raw.iloc[header_idx].astype(str).str.lower().str.strip()
+        df = df_raw.iloc[header_idx + 1:].reset_index(drop=True)
+        
+        # 4. Mapeo posicional (Resuelve el problema de múltiples columnas 'Debe' o 'Balance')
+        idx_codigo, idx_cuenta = -1, -1
+        indices_debe, indices_haber, indices_balance = [], [], []
+        
+        for i, col in enumerate(column_names):
+            if any(x in col for x in ['código', 'codigo', 'cuenta no', 'no.', 'cuenta_no', 'cta']) and idx_codigo == -1:
+                idx_codigo = i
+            elif any(x in col for x in ['nombre', 'descripción', 'descripcion', 'concepto']) and 'codigo' not in col and idx_cuenta == -1:
+                idx_cuenta = i
+            elif 'cuenta' in col and 'codigo' not in col and idx_cuenta == -1:
+                idx_cuenta = i
             elif any(x in col for x in ['débito', 'debito', 'debe', 'cargos']):
-                mapeo[col] = 'debito'
+                indices_debe.append(i)
             elif any(x in col for x in ['crédito', 'credito', 'haber', 'abonos']):
-                mapeo[col] = 'credito'
+                indices_haber.append(i)
             elif any(x in col for x in ['saldo', 'balance', 'final', 'monto']):
-                mapeo[col] = 'saldo_final'
-        df = df.rename(columns=mapeo)
-        if 'saldo_final' not in df.columns and 'debito' in df.columns and 'credito' in df.columns:
-            df['saldo_final'] = df['debito'] - df['credito']
-        col_req = {'codigo', 'cuenta', 'debito', 'credito', 'saldo_final'}
-        missing = col_req - set(df.columns)
-        if missing:
-            st.error(f"⚠️ Columnas detectadas: {list(df.columns)}. Faltan: {missing}")
+                indices_balance.append(i)
+        
+        if idx_codigo == -1 or idx_cuenta == -1:
+            st.error("⚠️ No se encontró la columna de Código o Nombre de Cuenta en el archivo.")
             return pd.DataFrame()
-        df['codigo'] = df['codigo'].fillna('').astype(str).str.strip()
-        df['codigo'] = df['codigo'].apply(lambda x: x.split('.')[0] if '.' in x else x)
-        df['cuenta'] = df['cuenta'].fillna('').astype(str).str.strip()
-        df = df[(df['codigo'] != '') & (~df['codigo'].str.lower().str.contains('total|resultado|suma|nan', na=False))]
+        
+        # 5. Extraer datos tomando la ÚLTIMA aparición (Sección "Balance Final")
+        col_dict = {
+            'codigo': df.iloc[:, idx_codigo],
+            'cuenta': df.iloc[:, idx_cuenta]
+        }
+        if indices_debe: col_dict['debito'] = df.iloc[:, indices_debe[-1]]
+        if indices_haber: col_dict['credito'] = df.iloc[:, indices_haber[-1]]
+        if indices_balance: col_dict['saldo_final'] = df.iloc[:, indices_balance[-1]]
+        
+        df_clean = pd.DataFrame(col_dict)
+        
+        # 6. Si no hay columna de saldo (improbable en tu formato, pero por seguridad)
+        if 'saldo_final' not in df_clean.columns and 'debito' in df_clean.columns and 'credito' in df_clean.columns:
+            df_clean['saldo_final'] = pd.to_numeric(df_clean['debito'], errors='coerce').fillna(0) - pd.to_numeric(df_clean['credito'], errors='coerce').fillna(0)
+        
+        # 7. Limpieza estricta de códigos y montos (Convierte los guiones "-" a ceros)
+        df_clean['codigo'] = df_clean['codigo'].fillna('').astype(str).str.strip()
+        df_clean['codigo'] = df_clean['codigo'].apply(lambda x: x.split('.')[0] if '.' in x else x)
+        df_clean['cuenta'] = df_clean['cuenta'].fillna('').astype(str).str.strip()
+        
+        # Filtrar filas vacías o subtotales
+        df_clean = df_clean[(df_clean['codigo'] != '') & (df_clean['codigo'] != 'nan') & (~df_clean['codigo'].str.lower().str.contains('total|resultado|suma', na=False))]
+        
+        # Parseo matemático
         for col in ['debito', 'credito', 'saldo_final']:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
-        return df.reset_index(drop=True)
+            if col in df_clean.columns:
+                # Quitar espacios, comas y convertir guiones en ceros
+                df_clean[col] = df_clean[col].astype(str).str.strip().str.replace(',', '').replace(r'^-*$', '0', regex=True)
+                df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce').fillna(0.0)
+            else:
+                df_clean[col] = 0.0
+                
+        return df_clean.reset_index(drop=True)
+        
     except Exception as e:
-        st.error(f"❌ Error al procesar la balanza: {e}")
+        st.error(f"❌ Error al procesar la balanza analítica: {e}")
         return pd.DataFrame()
 
 def analizar_balanza(df: pd.DataFrame) -> pd.DataFrame:
