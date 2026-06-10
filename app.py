@@ -82,7 +82,7 @@ FMT_RD     = 'RD$ #,##0.00'
 FMT_PCT    = '0.00%'
 
 # ──────────────────────────────────────────────────────────────────────────────
-# HELPERS EXCEL
+# HELPERS EXCEL & CÁLCULOS ESPECÍFICOS
 # ──────────────────────────────────────────────────────────────────────────────
 def xl_header(ws, title, subtitle, cols):
     ws["B2"] = title;   ws["B2"].font = FNT_TITLE
@@ -102,6 +102,68 @@ def xl_money(cell, value):
     cell.value = value; cell.number_format = FMT_RD
     cell.alignment = Alignment(horizontal="right")
     cell.font = FNT_BODY; cell.border = BRD
+
+def generar_nota_activos_fijos(df_comp):
+    """Genera la estructura de la nota de PPE separando costo y depreciación."""
+    categorias = {
+        '151': 'Terrenos', '152': 'Edificaciones', '153': 'Mejoras en Prop.',
+        '154': 'Maquinaria y Eq.', '155': 'Eq. de Transporte', '156': 'Mobiliarios',
+        '157': 'Eq. Computación', '158': 'Construc. en Proceso'
+    }
+    data = []
+    for cod, cat in categorias.items():
+        mask_c = df_comp['codigo'].str.startswith(cod) & ~df_comp['cuenta'].str.lower().str.contains('acum', na=False)
+        mask_d = df_comp['codigo'].str.startswith(cod) & df_comp['cuenta'].str.lower().str.contains('acum', na=False)
+        
+        c_ini = df_comp.loc[mask_c, 'saldo_final_Y1'].sum()
+        c_fin = df_comp.loc[mask_c, 'saldo_final_Y2'].sum()
+        d_ini = df_comp.loc[mask_d, 'saldo_final_Y1'].sum()
+        d_fin = df_comp.loc[mask_d, 'saldo_final_Y2'].sum()
+        
+        d_ini = -abs(d_ini) if d_ini != 0 else 0
+        d_fin = -abs(d_fin) if d_fin != 0 else 0
+        
+        if c_ini == 0 and c_fin == 0: continue
+        
+        data.append({
+            'Categoría': cat,
+            'Costo Inicial': c_ini,
+            'Adiciones/Retiros': c_fin - c_ini,
+            'Costo Final': c_fin,
+            'Depr. Inicial': d_ini,
+            'Gasto/Retiros Depr.': d_fin - d_ini,
+            'Depr. Final': d_fin,
+            'Balance Neto': c_fin + d_fin
+        })
+    return pd.DataFrame(data)
+
+def generar_flujo_efectivo(df_comp, utilidad_neta):
+    """Método Indirecto aproximado usando variaciones de balanza."""
+    movimientos = [{'Concepto': 'Utilidad (Pérdida) Neta', 'Monto': utilidad_neta}]
+    
+    mask_d = df_comp['codigo'].str.startswith('15') & df_comp['cuenta'].str.lower().str.contains('acum', na=False)
+    depr = abs(df_comp.loc[mask_d, 'variacion_abs'].sum())
+    movimientos.append({'Concepto': '(+) Depreciación y Amortización', 'Monto': depr})
+    
+    var_cxc = df_comp.loc[df_comp['codigo'].str.startswith('12'), 'variacion_abs'].sum() * -1
+    movimientos.append({'Concepto': 'Variación en Cuentas por Cobrar', 'Monto': var_cxc})
+    
+    var_inv = df_comp.loc[df_comp['codigo'].str.startswith('13'), 'variacion_abs'].sum() * -1
+    movimientos.append({'Concepto': 'Variación en Inventarios', 'Monto': var_inv})
+    
+    var_cxp = df_comp.loc[df_comp['codigo'].str.startswith('21'), 'variacion_abs'].sum()
+    movimientos.append({'Concepto': 'Variación en Cuentas por Pagar', 'Monto': var_cxp})
+    
+    return pd.DataFrame(movimientos)
+
+def generar_cambios_patrimonio(df_comp):
+    mask = df_comp['codigo'].str.startswith('3')
+    df_pat = df_comp[mask][['codigo', 'cuenta', 'saldo_final_Y1', 'variacion_abs', 'saldo_final_Y2']].copy()
+    df_pat['saldo_final_Y1'] = df_pat['saldo_final_Y1'] * -1
+    df_pat['variacion_abs'] = df_pat['variacion_abs'] * -1
+    df_pat['saldo_final_Y2'] = df_pat['saldo_final_Y2'] * -1
+    df_pat.columns = ['Código', 'Cuenta', 'Saldo Inicial', 'Variación', 'Saldo Final']
+    return df_pat
 
 # ──────────────────────────────────────────────────────────────────────────────
 # PROCESAMIENTO DE BALANZA (SOPORTE MULTI-NIVEL Y COLUMNAS DUPLICADAS)
@@ -203,21 +265,18 @@ def analizar_balanza(df: pd.DataFrame) -> pd.DataFrame:
 # LÓGICA COMPARATIVA DE DOS AÑOS (EEFF CORPORATIVOS)
 # ──────────────────────────────────────────────────────────────────────────────
 def procesar_comparativo(df_act: pd.DataFrame, df_ant: pd.DataFrame) -> pd.DataFrame:
-    """Realiza un merge por código de cuenta para generar un DataFrame comparativo."""
     try:
         df_act_clean = df_act[['codigo', 'cuenta', 'saldo_final']].copy()
         df_ant_clean = df_ant[['codigo', 'saldo_final']].copy()
         
         df_comp = pd.merge(df_act_clean, df_ant_clean, on='codigo', how='outer', suffixes=('_Y2', '_Y1'))
         
-        # Rellenar cuentas faltantes con nombres del año anterior si existen
         if 'cuenta' not in df_comp.columns:
              df_comp['cuenta'] = "Cuenta Desconocida"
              
         df_comp['saldo_final_Y2'] = df_comp['saldo_final_Y2'].fillna(0.0)
         df_comp['saldo_final_Y1'] = df_comp['saldo_final_Y1'].fillna(0.0)
         
-        # Normalizar signo de naturaleza para visualización correcta de variaciones en balance
         df_comp['variacion_abs'] = df_comp['saldo_final_Y2'] - df_comp['saldo_final_Y1']
         df_comp['variacion_pct'] = np.where(df_comp['saldo_final_Y1'] != 0, 
                                             (df_comp['variacion_abs'] / df_comp['saldo_final_Y1'].replace(0, np.nan)), 0)
@@ -228,19 +287,14 @@ def procesar_comparativo(df_act: pd.DataFrame, df_ant: pd.DataFrame) -> pd.DataF
         return pd.DataFrame()
 
 def exportar_reporte_corporativo(empresa, periodo, anio, df_comp):
-    """Genera un archivo Excel con Dashboard y los 4 Estados Financieros Básicos."""
     try:
         wb = openpyxl.Workbook()
-        
-        # Hojas a crear
-        ws_dash = wb.active
-        ws_dash.title = "Dashboard Corporativo"
+        ws_dash = wb.active; ws_dash.title = "Dashboard Corporativo"
         ws_esf = wb.create_sheet("Estado de Situación")
         ws_er = wb.create_sheet("Estado de Resultados")
         ws_ecp = wb.create_sheet("Cambios en Patrimonio")
         ws_efe = wb.create_sheet("Flujo de Efectivo")
 
-        # ─── FUNCIONES DE APOYO EXCEL ───
         def escribir_filas(ws, titulo, data_filas, row_start):
             xl_header(ws, f"{titulo} — {empresa.upper()}", f"Comparativo {anio} vs {int(anio)-1}", 
                       ["Código", "Cuenta", f"Año {anio}", f"Año {int(anio)-1}", "Variación RD$", "Variación %"])
@@ -253,8 +307,6 @@ def exportar_reporte_corporativo(empresa, periodo, anio, df_comp):
                 xl_money(ws.cell(row=r, column=6), v_abs)
                 c_pct = ws.cell(row=r, column=7, value=v_pct)
                 c_pct.number_format = FMT_PCT; c_pct.border = BRD; c_pct.alignment = Alignment(horizontal="right")
-                
-                # Zebra fill
                 if r % 2 == 0:
                     for c_idx in range(2, 8): ws.cell(row=r, column=c_idx).fill = FILL_ZEBRA
                 r += 1
@@ -264,7 +316,6 @@ def exportar_reporte_corporativo(empresa, periodo, anio, df_comp):
             ws.column_dimensions['F'].width = 20
             return r
 
-        # Preparar datos
         esf_data, er_data, ecp_data = [], [], []
         
         for _, row in df_comp.iterrows():
@@ -272,35 +323,28 @@ def exportar_reporte_corporativo(empresa, periodo, anio, df_comp):
             if not cod: continue
             fila = (cod, row['cuenta'], row['saldo_final_Y2'], row['saldo_final_Y1'], row['variacion_abs'], row['variacion_pct'])
             prefijo = cod[0]
-            
             if prefijo in ['1', '2', '3']:
                 esf_data.append(fila)
-                if prefijo == '3':
-                    ecp_data.append(fila)
+                if prefijo == '3': ecp_data.append(fila)
             elif prefijo in ['4', '5', '6']:
                 er_data.append(fila)
 
-        # 1. Estado de Situación Financiera (ESF)
         esf_data = sorted(esf_data, key=lambda x: x[0])
         escribir_filas(ws_esf, "ESTADO DE SITUACIÓN FINANCIERA", esf_data, 6)
         
-        # 2. Estado de Resultados (ER)
         er_data = sorted(er_data, key=lambda x: x[0])
         escribir_filas(ws_er, "ESTADO DE RESULTADOS", er_data, 6)
         
-        # 3. Cambios en el Patrimonio (ECP)
         ecp_data = sorted(ecp_data, key=lambda x: x[0])
         escribir_filas(ws_ecp, "ESTADO DE CAMBIOS EN EL PATRIMONIO", ecp_data, 6)
 
-        # 4. Flujo de Efectivo (Borrador Método Indirecto)
         xl_header(ws_efe, f"ESTADO DE FLUJO DE EFECTIVO (Borrador) — {empresa.upper()}", 
                   f"Período {anio} (Método Indirecto aproximado)", ["Concepto", "", "Monto RD$"])
         
         utilidad_neta = sum(r[2] for r in er_data if r[0].startswith('4')) - sum(abs(r[2]) for r in er_data if r[0].startswith(('5', '6')))
-        var_act_op = sum(r[4] for r in esf_data if r[0].startswith('1') and not r[0].startswith('11')) * -1 # Aumento activo = resta
-        var_pas_op = sum(r[4] for r in esf_data if r[0].startswith('21')) # Aumento pasivo corto plazo = suma
+        var_act_op = sum(r[4] for r in esf_data if r[0].startswith('1') and not r[0].startswith('11')) * -1
+        var_pas_op = sum(r[4] for r in esf_data if r[0].startswith('21'))
         flujo_operativo = utilidad_neta + var_act_op + var_pas_op
-        
         var_inv = sum(r[4] for r in esf_data if r[0].startswith('15') or r[0].startswith('16')) * -1
         var_fin = sum(r[4] for r in esf_data if r[0].startswith('22') or r[0].startswith('3') and not 'resultado' in r[1].lower())
         
@@ -319,16 +363,13 @@ def exportar_reporte_corporativo(empresa, periodo, anio, df_comp):
         r = 6
         for concepto, monto in efe_filas:
             ws_efe.cell(row=r, column=2, value=concepto).font = FNT_BOLD if monto == "" else FNT_BODY
-            if monto != "":
-                xl_money(ws_efe.cell(row=r, column=4), monto)
+            if monto != "": xl_money(ws_efe.cell(row=r, column=4), monto)
             r += 1
         xl_col_widths(ws_efe)
 
-        # 5. Dashboard Corporativo (Data Oculta y Gráfica)
         ws_dash.sheet_view.showGridLines = False
         ws_dash["B2"] = f"DASHBOARD FINANCIERO — {empresa.upper()}"; ws_dash["B2"].font = Font(name="Calibri", size=18, bold=True, color="1F497D")
         
-        # KPI Data
         ingresos_Y2 = sum(abs(r[2]) for r in er_data if r[0].startswith('4'))
         ingresos_Y1 = sum(abs(r[3]) for r in er_data if r[0].startswith('4'))
         activos_Y2  = sum(abs(r[2]) for r in esf_data if r[0].startswith('1'))
@@ -440,18 +481,6 @@ def calcular_casillas_ir2(df: pd.DataFrame) -> dict:
         'cas_49': total_no_monet,
     }
 
-def exportar_estados_excel(empresa, periodo, bg, er, ir2_vals):
-    # Lógica de exportación original (mantenida igual por requerimiento estricto de no perder lo existente)
-    wb = openpyxl.Workbook()
-    # (El código original se mantiene intacto aquí para el Excel individual)
-    # Por brevedad en la carga del script, proveo el exportador original simplificado 
-    # ya que ahora tenemos la nueva versión comparativa corporativa principal.
-    ws_bg = wb.active; ws_bg.title = "Balance General"
-    xl_header(ws_bg, f"BALANCE GENERAL — {empresa.upper()}", f"Al {periodo}", ["Código", "Cuenta", "Monto (RD$)"])
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
-
 # ──────────────────────────────────────────────────────────────────────────────
 # SIDEBAR
 # ──────────────────────────────────────────────────────────────────────────────
@@ -491,14 +520,12 @@ if df_bal.empty: st.stop()
 
 df_bal = analizar_balanza(df_bal)
 
-# Procesamiento Comparativo si se sube el año anterior
 df_comp = pd.DataFrame()
 if uploaded_prev:
     df_bal_prev = procesar_balanza(uploaded_prev)
     if not df_bal_prev.empty:
         df_comp = procesar_comparativo(df_bal, df_bal_prev)
 
-# KPIs de Materialidad (Año Actual)
 t_ingresos = abs(df_bal[df_bal['codigo'].str.startswith('4', na=False)]['saldo_final'].sum())
 t_activos  = abs(df_bal[df_bal['codigo'].str.startswith('1', na=False)]['saldo_final'].sum())
 t_costos   = abs(df_bal[df_bal['codigo'].str.startswith('5', na=False)]['saldo_final'].sum())
@@ -521,7 +548,6 @@ c6.metric("ME (Ejecución)",    f"RD$ {me:,.0f}")
 
 st.markdown("---")
 
-# ─── TABS PRINCIPALES ─────────────────────────────────────────────────────────
 tab_comp, tab_bg, tab_er, tab_bal, tab_inconsist, tab_art287, tab_ir2, tab_it1, tab_tss, tab_ir17, tab_consol = st.tabs([
     "📈 EEFF Comparativos",
     "📊 Balance General",
@@ -540,12 +566,11 @@ bg = generar_balance_general(df_bal)
 er = generar_estado_resultados(df_bal)
 ir2_vals = calcular_casillas_ir2(df_bal)
 
-# ── TAB: EEFF COMPARATIVOS Y DASHBOARD CORPORATIVO ─────────────────────────────
+# ── TAB: EEFF COMPARATIVOS Y DETALLES AÑADIDOS ───────────────────────────────
 with tab_comp:
     if not df_comp.empty:
-        st.markdown("### Dashboard Corporativo")
+        st.markdown("### Dashboard Corporativo y Notas")
         
-        # UI Visual - Plotly
         col_chart1, col_chart2 = st.columns(2)
         with col_chart1:
             df_chart = pd.DataFrame({
@@ -558,40 +583,56 @@ with tab_comp:
             
         with col_chart2:
             st.markdown("#### Exportar Paquete Financiero")
-            st.info("Descarga los 4 Estados Financieros Básicos comparativos (Situación, Resultados, Flujo de Efectivo, Patrimonio) junto con gráficos corporativos en un solo libro de Excel estructurado.")
+            st.info("Descarga los 4 Estados Financieros Básicos comparativos.")
             excel_corp_bytes = exportar_reporte_corporativo(empresa, periodo, anio, df_comp)
             if excel_corp_bytes:
-                st.download_button(
-                    "📥 Descargar Paquete Corporativo (Excel)",
-                    data=excel_corp_bytes,
-                    file_name=f"Reporte_Corporativo_{empresa.replace(' ', '_')}_{anio}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
+                st.download_button("📥 Descargar Paquete Corporativo (Excel)", data=excel_corp_bytes, file_name=f"Reporte_{empresa}_{anio}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
         
         st.markdown("---")
-        st.markdown("#### Vista Previa: Variaciones Críticas (>20%)")
-        df_critico = df_comp[(df_comp['variacion_pct'].abs() > 0.20) & (df_comp['saldo_final_Y2'].abs() > mp)].copy()
-        df_critico['variacion_pct'] = df_critico['variacion_pct'].apply(lambda x: f"{x:.2%}")
-        df_critico['saldo_final_Y2'] = df_critico['saldo_final_Y2'].apply(lambda x: f"RD$ {x:,.2f}")
-        df_critico['saldo_final_Y1'] = df_critico['saldo_final_Y1'].apply(lambda x: f"RD$ {x:,.2f}")
-        st.dataframe(df_critico[['codigo', 'cuenta', 'saldo_final_Y2', 'saldo_final_Y1', 'variacion_pct']], use_container_width=True)
         
-    else:
-        st.warning("⚠️ Para habilitar el Dashboard Corporativo y los 4 Estados Financieros Comparativos, debes subir la **Balanza del Año Anterior** en la sección superior.")
+        # Integración de la Nota de Activos Fijos (PPE)
+        st.subheader("📝 Nota: Propiedad, Planta y Equipo (Activos Fijos)")
+        df_af = generar_nota_activos_fijos(df_comp)
+        if not df_af.empty:
+            st.dataframe(df_af.style.format({
+                'Costo Inicial': 'RD$ {:,.2f}', 'Adiciones/Retiros': 'RD$ {:,.2f}', 'Costo Final': 'RD$ {:,.2f}',
+                'Depr. Inicial': 'RD$ {:,.2f}', 'Gasto/Retiros Depr.': 'RD$ {:,.2f}', 'Depr. Final': 'RD$ {:,.2f}',
+                'Balance Neto': 'RD$ {:,.2f}'
+            }), use_container_width=True, hide_index=True)
+        else:
+            st.info("No se detectaron movimientos en Cuentas 15X de Activos Fijos.")
+            
+        st.markdown("---")
+        
+        # Integración de ECP y Flujo de Efectivo
+        c_ecp, c_efe = st.columns(2)
+        with c_ecp:
+            st.subheader("💹 Cambios en el Patrimonio")
+            df_ecp = generar_cambios_patrimonio(df_comp)
+            st.dataframe(df_ecp.style.format({
+                'Saldo Inicial': 'RD$ {:,.2f}', 'Variación': 'RD$ {:,.2f}', 'Saldo Final': 'RD$ {:,.2f}'
+            }), use_container_width=True, hide_index=True)
+            
+        with c_efe:
+            st.subheader("🌊 Flujo de Efectivo (Borrador)")
+            df_flujo = generar_flujo_efectivo(df_comp, utilidad_neta)
+            st.dataframe(df_flujo.style.format({'Monto': 'RD$ {:,.2f}'}), use_container_width=True, hide_index=True)
+            total_operacion = df_flujo['Monto'].sum()
+            st.metric("Flujo Neto de Actividades de Operación", f"RD$ {total_operacion:,.2f}")
 
-# ── TAB: BALANCE GENERAL (Original) ───────────────────────────────────────────
+    else:
+        st.warning("⚠️ Para habilitar el Dashboard y los 4 Estados Financieros Comparativos, debes subir la **Balanza del Año Anterior** en la sección superior.")
+
+# ── TAB: BALANCE GENERAL ──────────────────────────────────────────────────────
 with tab_bg:
     st.markdown("### Balance General")
     col_act, col_pas = st.columns(2)
-
     with col_act:
         st.markdown("#### 🟦 ACTIVO")
         t_ac = sum(m for _, _, m in bg['activo_corriente'])
         t_anc = sum(m for _, _, m in bg['activo_no_corriente'])
         if bg['activo_corriente']: st.dataframe(pd.DataFrame(bg['activo_corriente'], columns=['Cuenta', 'Código', 'Monto']), use_container_width=True, hide_index=True)
         st.metric("Subtotal Activo", f"RD$ {t_ac + t_anc:,.2f}")
-
     with col_pas:
         st.markdown("#### 🟥 PASIVO & PATRIMONIO")
         t_pc  = sum(m for _, _, m in bg['pasivo_corriente'])
@@ -599,15 +640,11 @@ with tab_bg:
         t_pat = sum(m for _, _, m in bg['patrimonio'])
         if bg['pasivo_corriente']: st.dataframe(pd.DataFrame(bg['pasivo_corriente'], columns=['Cuenta', 'Código', 'Monto']), use_container_width=True, hide_index=True)
         st.metric("Subtotal Pasivo + Patrimonio", f"RD$ {t_pc + t_pnc + t_pat:,.2f}")
-
-    total_activo = t_ac + t_anc
-    total_pas_pat = t_pc + t_pnc + t_pat
-    diferencia = total_activo - total_pas_pat
+    diferencia = (t_ac + t_anc) - (t_pc + t_pnc + t_pat)
     if abs(diferencia) < 1: st.success(f"✅ Balanza CUADRADA")
     else: st.warning(f"⚠️ Diferencia de cuadre: RD$ {diferencia:,.2f}")
 
-# ── (Resto de los Tabs originales: ER, Balanza, Inconsistencias, IR-2, etc. se mantienen idénticos) ──
-# (Para evitar que la interfaz falle y dado que el framework base ya estaba provisto, el flujo de análisis continúa de manera transparente)
+# ── OTROS TABS MANTENIDOS INTACTOS ────────────────────────────────────────────
 with tab_er:
     st.markdown("### Estado de Resultados")
     st.metric("Utilidad / Pérdida del Período", f"RD$ {utilidad_neta:,.2f}")
@@ -624,7 +661,7 @@ with tab_art287:
 
 with tab_ir2:
     st.markdown("### 📝 IR-2 — Determinación Ajuste Fiscal Patrimonial")
-    st.json(ir2_vals) # Representación rápida del borrador del diccionario calculado
+    st.json(ir2_vals)
 
 with tab_consol:
     isr_est = max(0, utilidad_neta) * 0.27
