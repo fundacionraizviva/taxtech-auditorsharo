@@ -153,6 +153,7 @@ def procesar_comparativo(df_act: pd.DataFrame, df_ant: pd.DataFrame) -> pd.DataF
     df_comp = pd.merge(df_act[['codigo', 'cuenta', 'saldo_final']], df_ant[['codigo', 'saldo_final']], on='codigo', how='outer', suffixes=('_Y2', '_Y1')).fillna(0.0)
     df_comp.loc[df_comp['cuenta'] == 0.0, 'cuenta'] = "Cuenta Histórica"
     df_comp['variacion_abs'] = df_comp['saldo_final_Y2'] - df_comp['saldo_final_Y1']
+    df_comp['variacion_pct'] = np.where(df_comp['saldo_final_Y1'] != 0, (df_comp['variacion_abs'] / df_comp['saldo_final_Y1'].replace(0, np.nan)), 0)
     return df_comp
 
 def calcular_casillas_ir2(df: pd.DataFrame) -> dict:
@@ -404,6 +405,7 @@ def html_balance_general(df_comp, anio, tipo='activo'):
                 tot_nc_y2 += v2; tot_nc_y1 += v1
                 html += f"<tr><td>{r['cuenta'].title()}</td><td></td><td>{fmt_c(v2)}</td><td>{fmt_c(v1)}</td></tr>"
         html += f"<tr class='subtotal'><td>Total activos no corrientes</td><td></td><td>{fmt_c(tot_nc_y2)}</td><td>{fmt_c(tot_nc_y1)}</td></tr>"
+
     else:
         html += "<tr><td class='seccion' colspan='4'>Pasivos corrientes:</td></tr>"
         for _, r in df_comp[df_comp['codigo'].str.startswith('2', na=False)].iterrows():
@@ -454,6 +456,7 @@ def html_flujo_hoja_trabajo(df_comp, anio):
 def html_nota_ppe_completa(df_comp, anio_actual):
     cats = ['Terrenos y edificaciones', 'Instalaciones recreativas', 'Equipos industriales y transporte', 'Mobiliarios y equipos de oficina', 'Otros activos y mejoras', 'Construcción en proceso']
     data = {c: {'c_y0':0, 'c_y1':0, 'c_y2':0, 'd_y0':0, 'd_y1':0, 'd_y2':0} for c in cats}
+    
     for _, r in df_comp[df_comp['codigo'].str.startswith('1', na=False)].iterrows():
         if es_activo_no_corriente(r['codigo'], r['cuenta']):
             n = str(r['cuenta']).lower()
@@ -463,6 +466,7 @@ def html_nota_ppe_completa(df_comp, anio_actual):
             elif any(x in n for x in ['proceso', 'transito']): c = 'Construcción en proceso'
             elif 'otro' in n or 'mejora' in n: c = 'Otros activos y mejoras'
             else: c = 'Mobiliarios y equipos de oficina'
+            
             y1, y2 = abs(r['saldo_final_Y1']), abs(r['saldo_final_Y2'])
             if 'acum' in n: 
                 data[c]['d_y1'] += y1; data[c]['d_y2'] += y2; data[c]['d_y0'] += (y1 * 0.8)
@@ -473,6 +477,7 @@ def html_nota_ppe_completa(df_comp, anio_actual):
         h = f"<tr><td colspan='8' class='titulo-anio'>{titulo}</td></tr><tr><th></th>"
         for c in cats: h += f"<th style='text-align: right; width: 14%;'>{c}</th>"
         h += "<th style='text-align: right; width: 14%;'>Total</th></tr>"
+        
         def fila(lbl, vals, mult=1, sub=False, tot=False):
             cls = "total" if tot else ("subtotal" if sub else "")
             r = f"<tr class='{cls}'><td>{lbl}</td>"
@@ -481,20 +486,25 @@ def html_nota_ppe_completa(df_comp, anio_actual):
             return r + f"<td>{fmt_c(s)}</td></tr>"
             
         h += "<tr><td class='seccion' colspan='8'>Costos:</td></tr>"
-        c_i = [data[c][k_ini] for c in cats]; c_f = [data[c][k_fin] for c in cats]
+        c_i = [data[c][k_ini] for c in cats]
+        c_f = [data[c][k_fin] for c in cats]
         h += fila("Balance al inicio", c_i)
         h += fila("Adiciones", [max(0, f - i) for f, i in zip(c_f, c_i)])
-        h += fila("Retiros/Transferencias", [min(0, f - i) for f, i in zip(c_f, c_i)])
+        h += fila("Transferencias", [0]*len(cats))
+        h += fila("Retiros", [min(0, f - i) for f, i in zip(c_f, c_i)])
         h += fila("Balance al costo final", c_f, sub=True)
         
         h += "<tr><td class='seccion' colspan='8'>Depreciación:</td></tr>"
-        d_i = [data[c][d_ini] for c in cats]; d_f = [data[c][d_fin] for c in cats]
+        d_i = [data[c][d_ini] for c in cats]
+        d_f = [data[c][d_fin] for c in cats]
         h += fila("Balance al inicio", d_i, -1)
         h += fila("Gasto de depreciación", [max(0, f - i) for f, i in zip(d_f, d_i)], -1)
         h += fila("Retiros", [min(0, f - i) for f, i in zip(d_f, d_i)], -1)
         h += fila("Dep. Acumulada final", d_f, -1, sub=True)
+        
         h += fila("Balance neto al final", [cf - df for cf, df in zip(c_f, d_f)], tot=True)
         return h
+
     return "<table class='tabla-contable'>" + bloque(anio_actual, 'c_y1', 'c_y2', 'd_y1', 'd_y2') + bloque(int(anio_actual)-1, 'c_y0', 'c_y1', 'd_y0', 'd_y1') + "</table>"
 
 def html_borrador_ir2(df_bal, periodo):
@@ -510,31 +520,25 @@ def html_borrador_ir2(df_bal, periodo):
     impuesto_activos = activos_totales * 0.01
     impuesto_mayor = max(isr_liquidado, impuesto_activos)
 
-    html = f"""
-    <table class='tabla-ir2'>
-        <tr><th colspan='3'>DECLARACIÓN JURADA ANUAL DEL IMPUESTO SOBRE LA RENTA DE SOCIEDADES (IR-2)<br><span style='font-weight:normal; font-size:0.85rem;'>AÑO FISCAL: {periodo}</span></th></tr>
-        <tr><td colspan='3' class='header-seccion'>I. DETERMINACIÓN DE LA RENTA NETA IMPONIBLE O PÉRDIDA</td></tr>
-        <tr><td class='col-num'>1</td><td class='col-desc'>Total de Ingresos Brutos</td><td class='col-monto'>RD$ {ingresos:,.2f}</td></tr>
-        <tr><td class='col-num'>2</td><td class='col-desc'>Menos: Costo de Ventas</td><td class='col-monto' style='color:#dc2626;'>RD$ ({costos:,.2f})</td></tr>
-        <tr><td class='col-num'>3</td><td class='col-desc'>Menos: Gastos Operacionales y Financieros</td><td class='col-monto' style='color:#dc2626;'>RD$ ({gastos:,.2f})</td></tr>
-        <tr class='fila-total'><td class='col-num'>4</td><td class='col-desc'>Utilidad (o Pérdida) Neta antes de Impuestos</td><td class='col-monto'>RD$ {utilidad_neta:,.2f}</td></tr>
-        
-        <tr><td colspan='3' class='header-seccion'>II. LIQUIDACIÓN DEL IMPUESTO SOBRE LA RENTA</td></tr>
-        <tr><td class='col-num'>5</td><td class='col-desc'>Renta Neta Imponible (Base de cálculo)</td><td class='col-monto'>RD$ {renta_neta_imponible:,.2f}</td></tr>
-        <tr class='fila-total'><td class='col-num'>6</td><td class='col-desc'>Impuesto Liquidado (Tasa del 27%)</td><td class='col-monto'>RD$ {isr_liquidado:,.2f}</td></tr>
-        
-        <tr><td colspan='3' class='header-seccion'>III. LIQUIDACIÓN DEL IMPUESTO A LOS ACTIVOS (Anexo A)</td></tr>
-        <tr><td class='col-num'>7</td><td class='col-desc'>Total Activos Imponibles (Aproximación)</td><td class='col-monto'>RD$ {activos_totales:,.2f}</td></tr>
-        <tr class='fila-total'><td class='col-num'>8</td><td class='col-desc'>Impuesto a los Activos (Tasa del 1%)</td><td class='col-monto'>RD$ {impuesto_activos:,.2f}</td></tr>
-        
-        <tr><td colspan='3' class='header-seccion'>IV. RESUMEN DE PAGO</td></tr>
-        <tr class='fila-total' style='background-color:#1e3a5f; color:white;'>
-            <td class='col-num' style='background-color:#1e3a5f;'>9</td>
-            <td class='col-desc'>IMPUESTO MAYOR A PAGAR (ISR vs Activos)</td>
-            <td class='col-monto'>RD$ {impuesto_mayor:,.2f}</td>
-        </tr>
-    </table>
-    """
+    html = "<table class='tabla-ir2'>"
+    html += f"<tr><th colspan='3'>DECLARACIÓN JURADA ANUAL DEL IMPUESTO SOBRE LA RENTA DE SOCIEDADES (IR-2)<br><span style='font-weight:normal; font-size:0.85rem;'>AÑO FISCAL: {periodo}</span></th></tr>"
+    html += "<tr><td colspan='3' class='header-seccion'>I. DETERMINACIÓN DE LA RENTA NETA IMPONIBLE O PÉRDIDA</td></tr>"
+    html += f"<tr><td class='col-num'>1</td><td class='col-desc'>Total de Ingresos Brutos</td><td class='col-monto'>RD$ {ingresos:,.2f}</td></tr>"
+    html += f"<tr><td class='col-num'>2</td><td class='col-desc'>Menos: Costo de Ventas</td><td class='col-monto' style='color:#dc2626;'>RD$ ({costos:,.2f})</td></tr>"
+    html += f"<tr><td class='col-num'>3</td><td class='col-desc'>Menos: Gastos Operacionales y Financieros</td><td class='col-monto' style='color:#dc2626;'>RD$ ({gastos:,.2f})</td></tr>"
+    html += f"<tr class='fila-total'><td class='col-num'>4</td><td class='col-desc'>Utilidad (o Pérdida) Neta antes de Impuestos</td><td class='col-monto'>RD$ {utilidad_neta:,.2f}</td></tr>"
+    
+    html += "<tr><td colspan='3' class='header-seccion'>II. LIQUIDACIÓN DEL IMPUESTO SOBRE LA RENTA</td></tr>"
+    html += f"<tr><td class='col-num'>5</td><td class='col-desc'>Renta Neta Imponible (Base de cálculo)</td><td class='col-monto'>RD$ {renta_neta_imponible:,.2f}</td></tr>"
+    html += f"<tr class='fila-total'><td class='col-num'>6</td><td class='col-desc'>Impuesto Liquidado (Tasa del 27%)</td><td class='col-monto'>RD$ {isr_liquidado:,.2f}</td></tr>"
+    
+    html += "<tr><td colspan='3' class='header-seccion'>III. LIQUIDACIÓN DEL IMPUESTO A LOS ACTIVOS (Anexo A)</td></tr>"
+    html += f"<tr><td class='col-num'>7</td><td class='col-desc'>Total Activos Imponibles (Aproximación)</td><td class='col-monto'>RD$ {activos_totales:,.2f}</td></tr>"
+    html += f"<tr class='fila-total'><td class='col-num'>8</td><td class='col-desc'>Impuesto a los Activos (Tasa del 1%)</td><td class='col-monto'>RD$ {impuesto_activos:,.2f}</td></tr>"
+    
+    html += "<tr><td colspan='3' class='header-seccion'>IV. RESUMEN DE PAGO</td></tr>"
+    html += f"<tr class='fila-total' style='background-color:#1e3a5f; color:white;'><td class='col-num' style='background-color:#1e3a5f;'>9</td><td class='col-desc'>IMPUESTO MAYOR A PAGAR (ISR vs Activos)</td><td class='col-monto'>RD$ {impuesto_mayor:,.2f}</td></tr>"
+    html += "</table>"
     return html
 
 # ──────────────────────────────────────────────────────────────────────────────
