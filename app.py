@@ -57,7 +57,6 @@ PALABRAS_CRITICAS_ART287 = {
     'honorario': 'Art. 309 CTRD: Retención 10% personas físicas / 2% entre jurídicas.',
 }
 
-# Formateador Contable (Convierte negativos a paréntesis y ceros a guiones)
 def fmt_c(val):
     if pd.isna(val) or round(val, 2) == 0: return "-"
     return f"({abs(val):,.0f})" if val < 0 else f"{val:,.0f}"
@@ -145,14 +144,13 @@ def procesar_comparativo(df_act: pd.DataFrame, df_ant: pd.DataFrame) -> pd.DataF
     return df_comp
 
 # ──────────────────────────────────────────────────────────────────────────────
-# GENERADORES DE TABLAS HTML CORPORATIVAS
+# GENERADORES DE TABLAS HTML CORPORATIVAS (SINTAXIS CORREGIDA)
 # ──────────────────────────────────────────────────────────────────────────────
 def html_estado_resultados(df_comp, anio):
-    html = f"""<table class="tabla-contable">
+    html = f"""<table class='tabla-contable'>
         <tr><th>Conceptos</th><th>Nota</th><th>{anio}</th><th>{int(anio)-1}</th></tr>
-        <tr><td class="seccion" colspan="4">Ingresos operacionales:</td></tr>"""
+        <tr><td class='seccion' colspan='4'>Ingresos operacionales:</td></tr>"""
     
-    # INGRESOS
     ing_y2, ing_y1 = 0, 0
     for _, r in df_comp[df_comp['codigo'].str.startswith('4', na=False)].iterrows():
         v2, v1 = abs(r['saldo_final_Y2']), abs(r['saldo_final_Y1'])
@@ -161,11 +159,9 @@ def html_estado_resultados(df_comp, anio):
         html += f"<tr><td>{r['cuenta'].title()}</td><td></td><td>{fmt_c(v2)}</td><td>{fmt_c(v1)}</td></tr>"
     html += f"<tr class='subtotal'><td>Total Ingresos</td><td></td><td>{fmt_c(ing_y2)}</td><td>{fmt_c(ing_y1)}</td></tr>"
     
-    # COSTOS Y GASTOS
-    html += f"<tr><td class="seccion" colspan="4">Costos y gastos operacionales:</td></tr>"
+    html += f"<tr><td class='seccion' colspan='4'>Costos y gastos operacionales:</td></tr>"
     gas_y2, gas_y1 = 0, 0
     for _, r in df_comp[df_comp['codigo'].str.startswith(('5','6'), na=False)].iterrows():
-        # Para que se vean negativos en el reporte
         v2, v1 = -abs(r['saldo_final_Y2']), -abs(r['saldo_final_Y1'])
         if v2 == 0 and v1 == 0: continue
         gas_y2 += v2; gas_y1 += v1
@@ -177,20 +173,18 @@ def html_estado_resultados(df_comp, anio):
     return html
 
 def html_balance_general(df_comp, anio, tipo='activo'):
-    html = f"""<table class="tabla-contable">
+    html = f"""<table class='tabla-contable'>
         <tr><th>{tipo.capitalize()}s</th><th>Nota</th><th>{anio}</th><th>{int(anio)-1}</th></tr>"""
     
-    tot_c_y2, tot_c_y1 = 0, 0
-    tot_nc_y2, tot_nc_y1 = 0, 0
+    tot_c_y2, tot_c_y1, tot_nc_y2, tot_nc_y1 = 0, 0, 0, 0
     
     if tipo == 'activo':
-        html += f"<tr><td class="seccion" colspan="4">Activos corrientes:</td></tr>"
+        html += f"<tr><td class='seccion' colspan='4'>Activos corrientes:</td></tr>"
         prefijos_c, prefijos_nc = ('11','12','13','14'), ('15','16','17','18','19')
     else:
-        html += f"<tr><td class="seccion" colspan="4">Pasivos corrientes:</td></tr>"
+        html += f"<tr><td class='seccion' colspan='4'>Pasivos corrientes:</td></tr>"
         prefijos_c, prefijos_nc = ('21',), ('22','23')
 
-    # CORRIENTE
     for _, r in df_comp[df_comp['codigo'].str.startswith(prefijos_c, na=False)].iterrows():
         v2, v1 = abs(r['saldo_final_Y2']), abs(r['saldo_final_Y1'])
         if v2 == 0 and v1 == 0: continue
@@ -198,21 +192,18 @@ def html_balance_general(df_comp, anio, tipo='activo'):
         html += f"<tr><td>{r['cuenta'].title()}</td><td></td><td>{fmt_c(v2)}</td><td>{fmt_c(v1)}</td></tr>"
     html += f"<tr class='subtotal'><td>Total {tipo}s corrientes</td><td></td><td>{fmt_c(tot_c_y2)}</td><td>{fmt_c(tot_c_y1)}</td></tr>"
     
-    # NO CORRIENTE
-    html += f"<tr><td class="seccion" colspan="4">{tipo.capitalize()}s no corrientes:</td></tr>"
+    html += f"<tr><td class='seccion' colspan='4'>{tipo.capitalize()}s no corrientes:</td></tr>"
     for _, r in df_comp[df_comp['codigo'].str.startswith(prefijos_nc, na=False)].iterrows():
         v2, v1 = abs(r['saldo_final_Y2']), abs(r['saldo_final_Y1'])
-        if tipo == 'activo' and 'acum' in r['cuenta'].lower():
-            v2, v1 = -v2, -v1 # Depreciación resta
+        if tipo == 'activo' and 'acum' in r['cuenta'].lower(): v2, v1 = -v2, -v1 
         if v2 == 0 and v1 == 0: continue
         tot_nc_y2 += v2; tot_nc_y1 += v1
         html += f"<tr><td>{r['cuenta'].title()}</td><td></td><td>{fmt_c(v2)}</td><td>{fmt_c(v1)}</td></tr>"
     html += f"<tr class='subtotal'><td>Total {tipo}s no corrientes</td><td></td><td>{fmt_c(tot_nc_y2)}</td><td>{fmt_c(tot_nc_y1)}</td></tr>"
     
-    # PATRIMONIO (Si es Pasivo, se añade al final)
     pat_y2, pat_y1 = 0, 0
     if tipo == 'pasivo':
-        html += f"<tr><td class="seccion" colspan="4">Patrimonio:</td></tr>"
+        html += f"<tr><td class='seccion' colspan='4'>Patrimonio:</td></tr>"
         for _, r in df_comp[df_comp['codigo'].str.startswith('3', na=False)].iterrows():
             v2, v1 = abs(r['saldo_final_Y2']), abs(r['saldo_final_Y1'])
             if v2 == 0 and v1 == 0: continue
@@ -229,45 +220,106 @@ def html_balance_general(df_comp, anio, tipo='activo'):
     return html
 
 def html_flujo_hoja_trabajo(df_comp, anio):
-    html = f"""<table class="tabla-contable">
+    html = f"""<table class='tabla-contable'>
         <tr><th>Hoja de Flujo de Efectivo</th><th>{anio}</th><th>Anterior<br>{int(anio)-1}</th></tr>
-        <tr><td class="seccion" colspan="3">Activos</td></tr>"""
-    
+        <tr><td class='seccion' colspan='3'>Activos</td></tr>"""
     for _, r in df_comp[df_comp['codigo'].str.startswith('1', na=False)].iterrows():
         v2, v1 = abs(r['saldo_final_Y2']), abs(r['saldo_final_Y1'])
         if 'acum' in r['cuenta'].lower(): v2, v1 = -v2, -v1
-        if v2 != 0 or v1 != 0:
-            html += f"<tr><td>{r['cuenta'].title()}</td><td>{fmt_c(v2)}</td><td>{fmt_c(v1)}</td></tr>"
+        if v2 != 0 or v1 != 0: html += f"<tr><td>{r['cuenta'].title()}</td><td>{fmt_c(v2)}</td><td>{fmt_c(v1)}</td></tr>"
             
-    html += f"<tr><td class="seccion" colspan="3">Pasivos</td></tr>"
+    html += f"<tr><td class='seccion' colspan='3'>Pasivos</td></tr>"
     for _, r in df_comp[df_comp['codigo'].str.startswith('2', na=False)].iterrows():
-        v2, v1 = -abs(r['saldo_final_Y2']), -abs(r['saldo_final_Y1']) # Pasivos se muestran negativos en la hoja de trabajo
-        if v2 != 0 or v1 != 0:
-            html += f"<tr><td>{r['cuenta'].title()}</td><td>{fmt_c(v2)}</td><td>{fmt_c(v1)}</td></tr>"
-            
+        v2, v1 = -abs(r['saldo_final_Y2']), -abs(r['saldo_final_Y1']) 
+        if v2 != 0 or v1 != 0: html += f"<tr><td>{r['cuenta'].title()}</td><td>{fmt_c(v2)}</td><td>{fmt_c(v1)}</td></tr>"
     html += "</table>"
     return html
 
 def html_flujo_inversion_financiamiento(df_comp, anio):
-    html = f"""<table class="tabla-contable">
+    html = f"""<table class='tabla-contable'>
         <tr><th></th><th>Nota</th><th>{anio}</th><th>{int(anio)-1}</th></tr>
-        <tr><td class="seccion" colspan="4">Flujos de efectivo por las actividades de inversión:</td></tr>"""
+        <tr><td class='seccion' colspan='4'>Flujos de efectivo por las actividades de inversión:</td></tr>"""
     
-    # Inversión (Variación en 15)
     inv_y2 = df_comp[df_comp['codigo'].str.startswith('15', na=False)]['variacion_abs'].sum() * -1
-    # Simulamos el Y1 como un % de la variación o 0 si no hay datos de Y0
     html += f"<tr><td>Adquisición de propiedad, mobiliarios y equipos</td><td>10</td><td>{fmt_c(inv_y2)}</td><td>-</td></tr>"
     html += f"<tr class='subtotal'><td>Efectivo neto usado en las actividades de inversión</td><td></td><td>{fmt_c(inv_y2)}</td><td>-</td></tr>"
     
-    # Financiamiento (Variación en 22 y 3)
-    html += f"<tr><td class="seccion" colspan="4">Flujos de efectivo por actividades de financiamiento:</td></tr>"
+    html += f"<tr><td class='seccion' colspan='4'>Flujos de efectivo por actividades de financiamiento:</td></tr>"
     fin_y2_pas = df_comp[df_comp['codigo'].str.startswith('22', na=False)]['variacion_abs'].sum()
-    fin_y2_pat = df_comp[df_comp['codigo'].str.startswith('3', na=False)]['variacion_abs'].sum() * -1 # Aumento de capital es positivo al flujo
+    fin_y2_pat = df_comp[df_comp['codigo'].str.startswith('3', na=False)]['variacion_abs'].sum() * -1 
     
     html += f"<tr><td>Préstamos obtenidos / pagados netos</td><td>11</td><td>{fmt_c(fin_y2_pas)}</td><td>-</td></tr>"
     html += f"<tr><td>Aportes recibidos de accionistas netos</td><td>12</td><td>{fmt_c(fin_y2_pat)}</td><td>-</td></tr>"
     html += f"<tr class='subtotal'><td>Efectivo neto provisto por las actividades de financiamiento</td><td></td><td>{fmt_c(fin_y2_pas + fin_y2_pat)}</td><td>-</td></tr>"
+    html += "</table>"
+    return html
+
+def html_nota_ppe_horizontal(df_comp, anio):
+    """Genera la tabla horizontal de PPE basada en el formato corporativo"""
+    categorias = {
+        'Terrenos y Edif.': ['151', '152'],
+        'Instalaciones': ['153'],
+        'Eq. Industriales': ['154', '155'],
+        'Mobiliarios y Ofic.': ['156', '157'],
+        'Construc. Proceso': ['158']
+    }
     
+    def calc(codes, depr=False):
+        y1, y2 = 0, 0
+        for cod in codes:
+            mask_c = df_comp['codigo'].str.startswith(cod) & ~df_comp['cuenta'].str.lower().str.contains('acum', na=False)
+            mask_d = df_comp['codigo'].str.startswith(cod) & df_comp['cuenta'].str.lower().str.contains('acum', na=False)
+            if depr:
+                y1 += df_comp.loc[mask_d, 'saldo_final_Y1'].sum()
+                y2 += df_comp.loc[mask_d, 'saldo_final_Y2'].sum()
+            else:
+                y1 += df_comp.loc[mask_c, 'saldo_final_Y1'].sum()
+                y2 += df_comp.loc[mask_c, 'saldo_final_Y2'].sum()
+        return y1, y2
+
+    c_ini, c_adi, c_ret, c_fin = [], [], [], []
+    d_ini, d_gas, d_ret, d_fin = [], [], [], []
+
+    for cat, codes in categorias.items():
+        cy1, cy2 = calc(codes, False)
+        dy1, dy2 = calc(codes, True)
+        
+        c_ini.append(cy1); diff_c = cy2 - cy1
+        c_adi.append(diff_c if diff_c > 0 else 0)
+        c_ret.append(diff_c if diff_c < 0 else 0)
+        c_fin.append(cy2)
+        
+        dy1, dy2 = -abs(dy1), -abs(dy2)
+        d_ini.append(dy1); diff_d = dy2 - dy1
+        d_gas.append(diff_d if diff_d < 0 else 0)
+        d_ret.append(diff_d if diff_d > 0 else 0)
+        d_fin.append(dy2)
+
+    html = "<table class='tabla-contable' style='text-align: right;'>"
+    html += "<tr><th style='text-align: left;'>Activos Fijos</th>"
+    for cat in categorias.keys(): html += f"<th style='text-align: right;'>{cat}</th>"
+    html += "<th style='text-align: right;'>Total</th></tr>"
+    
+    def render_row(label, data, is_tot=False, is_sub=False):
+        cls = "total" if is_tot else ("subtotal" if is_sub else "")
+        r = f"<tr class='{cls}'><td style='text-align: left;'>{label}</td>"
+        for val in data: r += f"<td>{fmt_c(val)}</td>"
+        return r + f"<td>{fmt_c(sum(data))}</td></tr>"
+        
+    html += f"<tr><td class='seccion' colspan='7'>Costos:</td></tr>"
+    html += render_row("Balance al inicio", c_ini)
+    html += render_row("Adiciones", c_adi)
+    html += render_row("Retiros/Transferencias", c_ret)
+    html += render_row("Balance al costo final", c_fin, is_sub=True)
+    
+    html += f"<tr><td class='seccion' colspan='7'>Depreciación:</td></tr>"
+    html += render_row("Balance al inicio", d_ini)
+    html += render_row("Gasto de depreciación", d_gas)
+    html += render_row("Retiros", d_ret)
+    html += render_row("Dep. Acumulada final", d_fin, is_sub=True)
+    
+    n_fin = [c + d for c, d in zip(c_fin, d_fin)]
+    html += render_row("Balance neto al final", n_fin, is_tot=True)
     html += "</table>"
     return html
 
@@ -307,18 +359,16 @@ mp = (t_ingresos if t_ingresos > 0 else t_activos) * pct_mp
 st.markdown(f"### 📌 {empresa} — {periodo}")
 
 # ─── TABS PRINCIPALES ─────────────────────────────────────────────────────────
-tab_comp, tab_bg, tab_er, tab_efe, tab_bal, tab_inconsist, tab_art287 = st.tabs([
-    "📈 Dashboard", "📊 Balance General", "📉 Estado de Resultados", "🌊 Flujo de Efectivo", "📋 Balanza", "🚨 Inconsistencias", "⚖️ Riesgos Art.287"
+tab_comp, tab_bg, tab_er, tab_efe, tab_ppe, tab_inconsist = st.tabs([
+    "📈 Dashboard", "📊 Balance General", "📉 Estado de Resultados", "🌊 Flujo de Efectivo", "🏗️ Anexo Activos Fijos", "🚨 Inconsistencias"
 ])
 
 with tab_comp:
     if not df_comp.empty:
         st.markdown("### Resumen Ejecutivo")
         c1, c2 = st.columns(2)
-        with c1:
-            st.metric("Ingresos Año Actual", f"RD$ {t_ingresos:,.0f}")
-        with c2:
-            st.metric("Materialidad Planificación", f"RD$ {mp:,.0f}")
+        with c1: st.metric("Ingresos Año Actual", f"RD$ {t_ingresos:,.0f}")
+        with c2: st.metric("Materialidad Planificación", f"RD$ {mp:,.0f}")
     else: st.warning("Sube el Año Anterior para comparativas completas.")
 
 with tab_bg:
@@ -329,8 +379,7 @@ with tab_bg:
     else: st.info("Sube la balanza comparativa para ver el Balance General formateado.")
 
 with tab_er:
-    if not df_comp.empty:
-        st.markdown(html_estado_resultados(df_comp, anio), unsafe_allow_html=True)
+    if not df_comp.empty: st.markdown(html_estado_resultados(df_comp, anio), unsafe_allow_html=True)
     else: st.info("Sube la balanza comparativa para ver el Estado de Resultados formateado.")
 
 with tab_efe:
@@ -345,12 +394,13 @@ with tab_efe:
             st.markdown(html_flujo_inversion_financiamiento(df_comp, anio), unsafe_allow_html=True)
     else: st.info("Sube la balanza comparativa para ver el Flujo de Efectivo.")
 
+with tab_ppe:
+    if not df_comp.empty:
+        st.markdown("### Nota a los Estados Financieros: Propiedad, Planta y Equipo")
+        st.markdown(html_nota_ppe_horizontal(df_comp, anio), unsafe_allow_html=True)
+    else: st.info("Sube la balanza comparativa para ver el Anexo de Activos Fijos.")
+
 with tab_inconsist:
     df_err = df_bal[~df_bal['validacion_naturaleza'].str.startswith('✅')]
     if df_err.empty: st.success("✅ Sin inconsistencias.")
-    else: st.dataframe(df_err[['codigo', 'cuenta', 'saldo_final', 'validacion_naturaleza']], use_container_width=True)
-
-with tab_art287:
-    df_fisc = df_bal[df_bal['alerta_fiscal'] != ""]
-    if df_fisc.empty: st.success("✅ Sin alertas fiscales.")
-    else: st.dataframe(df_fisc[['codigo', 'cuenta', 'saldo_final', 'alerta_fiscal']], use_container_width=True)
+    else: st.dataframe
