@@ -91,28 +91,32 @@ def es_pasivo_no_corriente(cod, nombre):
     return False
 
 # ──────────────────────────────────────────────────────────────────────────────
-# LECTOR DE ARCHIVOS UNIVERSAL (Tolerante a "Falsos Excel" y CSVs)
+# LECTOR DE ARCHIVOS AVANZADO (Tolerante a "Falsos Excel", CSVs y TXTs)
 # ──────────────────────────────────────────────────────────────────────────────
 def leer_archivo_robusto(file):
-    df = None
+    import io
+    file_bytes = file.read()
+    file.seek(0)
+    
+    # 1. Intentar como Excel nativo
     try:
-        file.seek(0)
-        df = pd.read_excel(file, header=None)
+        return pd.read_excel(io.BytesIO(file_bytes), header=None)
     except: pass
     
-    if df is None or df.empty:
-        try:
-            file.seek(0)
-            df = pd.read_csv(file, header=None, encoding='utf-8', sep=None, engine='python')
-        except: pass
+    # 2. Interpretar como texto (Manejo de falsos .xls exportados por ERPs de DGII)
+    try: text = file_bytes.decode('utf-8')
+    except: text = file_bytes.decode('latin1', errors='ignore')
         
-    if df is None or df.empty:
-        try:
-            file.seek(0)
-            df = pd.read_csv(file, header=None, encoding='latin1', sep=None, engine='python')
-        except: pass
-        
-    return df
+    lines = text.splitlines()
+    if not lines: return pd.DataFrame()
+    
+    # 3. Detectar delimitador dinámicamente
+    sep = ','
+    for s in [';', '\t', '|']:
+        if lines[0].count(s) > lines[0].count(sep):
+            sep = s
+            
+    return pd.read_csv(io.StringIO(text), sep=sep, header=None, dtype=str)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # PROCESAMIENTO DE ARCHIVOS INDEPENDIENTES
@@ -169,23 +173,34 @@ def procesar_606_607(file, tipo):
         df_raw = leer_archivo_robusto(file)
         if df_raw is None or df_raw.empty: return 0.0, 0.0
         
+        # Búsqueda difusa de la cabecera (DGII TXT/CSV/XLS)
         h_idx = -1
         for idx, row in df_raw.iterrows():
-            row_str = ' '.join([str(x).lower() for x in row.values])
-            if 'rnc' in row_str and ('ncf' in row_str or 'monto' in row_str):
+            row_str = "".join([str(x).lower() for x in row.values])
+            if ('rnc' in row_str or 'cedula' in row_str) and ('ncf' in row_str or 'monto' in row_str):
                 h_idx = idx; break
                 
         if h_idx == -1: return 0.0, 0.0
         
-        df = pd.DataFrame(df_raw.iloc[h_idx + 1:].values, columns=df_raw.iloc[h_idx].astype(str).str.lower().str.strip())
+        # Limpieza de nombres de columnas
+        cols = [str(c).lower().replace('í','i').replace('ó','o').replace('\n',' ').strip() for c in df_raw.iloc[h_idx].values]
+        df = pd.DataFrame(df_raw.iloc[h_idx + 1:].values, columns=cols)
         
-        col_monto = next((c for c in df.columns if any(x in str(c) for x in ['total monto facturado', 'monto facturado', 'monto total'])), None)
+        col_monto, col_itbis = None, None
         
+        for c in df.columns:
+            if 'total monto facturado' in c or 'monto total' in c: 
+                col_monto = c; break
+        if not col_monto:
+            for c in df.columns:
+                if 'monto facturado' in c and 'bienes' not in c and 'servicios' not in c:
+                    col_monto = c; break
+                    
         if tipo == "606":
-            col_itbis = next((c for c in df.columns if any(x in str(c) for x in ['itbis por adelantar', 'itbis adelantado'])), None)
-            if not col_itbis: col_itbis = next((c for c in df.columns if 'itbis facturado' in str(c)), None)
+            col_itbis = next((c for c in df.columns if 'itbis por adelantar' in c), None)
+            if not col_itbis: col_itbis = next((c for c in df.columns if 'itbis facturado' in c), None)
         else:
-            col_itbis = next((c for c in df.columns if any(x in str(c) for x in ['itbis cobrado', 'itbis facturado'])), None)
+            col_itbis = next((c for c in df.columns if 'itbis facturado' in c or 'itbis cobrado' in c), None)
             
         monto_total = pd.to_numeric(df[col_monto].astype(str).str.replace(',', ''), errors='coerce').fillna(0).sum() if col_monto else 0.0
         itbis_total = pd.to_numeric(df[col_itbis].astype(str).str.replace(',', ''), errors='coerce').fillna(0).sum() if col_itbis else 0.0
@@ -638,7 +653,6 @@ def exportar_reporte_corporativo(empresa, periodo, anio_act, df_comp):
         buf = io.BytesIO(); wb.save(buf)
         return buf.getvalue()
     except Exception as e:
-        st.error(f"Error generando Excel Corporativo: {e}")
         return None
 
 # ──────────────────────────────────────────────────────────────────────────────
