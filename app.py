@@ -76,7 +76,7 @@ TASA_SFS_PAT = 0.0709; TASA_AFP_PAT = 0.0710
 TASA_SRL = 0.0120; TASA_INFOTEP = 0.0100
 TASA_SFS_EMP = 0.0304; TASA_AFP_EMP = 0.0287
 
-# Techos TSS 2025 (actualizar según resolución vigente)
+# Techos TSS vigentes
 TECHO_SFS = 118476.99
 TECHO_AFP = 118476.99
 
@@ -158,7 +158,7 @@ def procesar_balanza(file) -> pd.DataFrame:
         return pd.DataFrame()
 
 # ──────────────────────────────────────────────────────────────────────────────
-# PROCESAMIENTO 606/607 MEJORADO — devuelve df completo además de totales
+# PROCESAMIENTO 606/607
 # ──────────────────────────────────────────────────────────────────────────────
 def procesar_606_607(file, tipo):
     try:
@@ -197,7 +197,7 @@ def procesar_606_607(file, tipo):
         return 0.0, 0.0, pd.DataFrame()
 
 # ──────────────────────────────────────────────────────────────────────────────
-# PROCESAMIENTO TSS MEJORADO — tabla detallada por empleado
+# PROCESAMIENTO TSS
 # ──────────────────────────────────────────────────────────────────────────────
 def procesar_tss(file):
     try:
@@ -311,7 +311,7 @@ def calcular_casillas_ir2(df: pd.DataFrame) -> dict:
     return {'cas_34': min(max(patrimonio_fisc, 0), total_no_monet)}
 
 # ──────────────────────────────────────────────────────────────────────────────
-# EXPORTADOR EXCEL CORPORATIVO (EEFF completos)
+# EXPORTADORES EXCEL
 # ──────────────────────────────────────────────────────────────────────────────
 def exportar_reporte_corporativo(empresa, periodo, anio_act, df_comp):
     try:
@@ -333,8 +333,7 @@ def exportar_reporte_corporativo(empresa, periodo, anio_act, df_comp):
         FMT_PCT   = '0.00%'
         anio_prev = int(anio_act) - 1
 
-        def _pct(y2, y1):
-            return (y2 - y1) / abs(y1) if y1 != 0 else (1.0 if y2 != 0 else 0.0)
+        def _pct(y2, y1): return (y2 - y1) / abs(y1) if y1 != 0 else (1.0 if y2 != 0 else 0.0)
 
         def format_row(ws, row_n, style_type='normal'):
             for cell in ws[row_n]:
@@ -609,9 +608,6 @@ def exportar_reporte_corporativo(empresa, periodo, anio_act, df_comp):
     except:
         return None
 
-# ──────────────────────────────────────────────────────────────────────────────
-# EXPORTADORES INDIVIDUALES DE EEFF
-# ──────────────────────────────────────────────────────────────────────────────
 def exportar_balance_excel(df_comp, empresa, anio):
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Balance General"
     FNT_H = Font(bold=True, color="FFFFFF"); FILL_H = PatternFill("solid", fgColor="1F497D")
@@ -642,7 +638,6 @@ def exportar_balance_excel(df_comp, empresa, anio):
             c = ws.cell(row=r, column=col, value=val); c.font = FNT_B
             if col > 1: c.number_format = FMT
         r += 1
-    # Activos
     sec("ACTIVOS CORRIENTES")
     ac2, ac1 = 0, 0
     for _, row in df_comp[df_comp['codigo'].str.startswith('1', na=False)].iterrows():
@@ -662,7 +657,6 @@ def exportar_balance_excel(df_comp, empresa, anio):
         c = ws.cell(row=r, column=col, value=val); c.font = Font(bold=True, size=12)
         if col > 1: c.number_format = FMT
     r += 2
-    # Pasivos
     sec("PASIVOS CORRIENTES")
     pc2, pc1 = 0, 0
     for _, row in df_comp[df_comp['codigo'].str.startswith('2', na=False)].iterrows():
@@ -862,7 +856,7 @@ def html_balance_general(df_comp, anio, tipo='activo'):
         for _, r in df_comp[df_comp['codigo'].str.startswith('1', na=False)].iterrows():
             if es_activo_no_corriente(r['codigo'], r['cuenta']):
                 v2, v1 = abs(r['saldo_final_Y2']), abs(r['saldo_final_Y1'])
-                if 'acum' in str(r['cuenta']).lower(): v2, v1 = -v2, -v1
+                if 'acum' in str(r['cuenta']).lower(): v2, v1 = -v2, -v1 
                 if v2 == 0 and v1 == 0: continue
                 tot_nc_y2 += v2; tot_nc_y1 += v1
                 html += f"<tr><td>{r['cuenta'].title()}</td><td></td><td>{fmt_c(v2)}</td><td>{fmt_c(v1)}</td></tr>"
@@ -922,83 +916,60 @@ def html_borrador_ir2(df_bal, periodo):
     impuesto_activos = activos_totales * 0.01
     impuesto_mayor   = max(isr_liquidado, impuesto_activos)
 
-    # Ajustes fiscales del Anexo G (identificados desde la balanza)
     depreciacion_libros = abs(df_bal[df_bal['cuenta'].str.lower().str.contains('deprecia', na=False)]['saldo_final'].sum())
-    inventario           = abs(df_bal[df_bal['cuenta'].str.lower().str.contains('inventari', na=False)]['saldo_final'].sum())
-    provisiones_nc       = abs(df_bal[df_bal['cuenta'].str.lower().str.contains('provision', na=False)]['saldo_final'].sum())
+    inventario          = abs(df_bal[df_bal['cuenta'].str.lower().str.contains('inventari', na=False)]['saldo_final'].sum())
+    provisiones_nc      = abs(df_bal[df_bal['cuenta'].str.lower().str.contains('provision', na=False)]['saldo_final'].sum())
 
     html = "<table class='tabla-ir2'>"
     html += f"<tr><th colspan='3'>DECLARACIÓN JURADA ANUAL DEL IMPUESTO SOBRE LA RENTA DE SOCIEDADES (IR-2)<br><span style='font-weight:normal;font-size:0.85rem;'>PERÍODO FISCAL: {periodo}</span></th></tr>"
-
-    # Sección Anexo B-1 (Estado de Resultados Fiscal)
     html += "<tr><td colspan='3' class='header-seccion'>📋 ANEXO B-1 — ESTADO DE RESULTADOS (Base Fiscal)</td></tr>"
     html += f"<tr><td class='col-num'>1.1</td><td class='col-desc'>Ingresos Ventas Locales (Casilla 1.1)</td><td class='col-monto'>RD$ {ingresos:,.2f}</td></tr>"
     html += f"<tr><td class='col-num'>5</td><td class='col-desc'>Costo de Ventas (Viene del Anexo D, Casilla 39)</td><td class='col-monto' style='color:#dc2626;'>RD$ ({costos:,.2f})</td></tr>"
     html += f"<tr><td class='col-num'>6</td><td class='col-desc'>Gastos de Personal y Operacionales</td><td class='col-monto' style='color:#dc2626;'>RD$ ({gastos:,.2f})</td></tr>"
     html += f"<tr class='fila-total'><td class='col-num'>14</td><td class='col-desc'>Beneficio (Pérdida) antes del ISR</td><td class='col-monto'>RD$ {utilidad_neta:,.2f}</td></tr>"
-
-    # Sección Anexo G (Ajustes Fiscales)
     html += "<tr><td colspan='3' class='header-seccion'>⚙️ ANEXO G — AJUSTES FISCALES</td></tr>"
     html += f"<tr><td class='col-num'>G.1</td><td class='col-desc'>Depreciación contabilizada en libros</td><td class='col-monto'>RD$ {depreciacion_libros:,.2f}</td></tr>"
     html += f"<tr><td class='col-num'>G.2</td><td class='col-desc'>Inventarios al cierre del período</td><td class='col-monto'>RD$ {inventario:,.2f}</td></tr>"
     html += f"<tr><td class='col-num'>G.3</td><td class='col-desc'>Provisiones registradas (validar admisibilidad Art.288)</td><td class='col-monto' style='color:#f59e0b;'>RD$ {provisiones_nc:,.2f}</td></tr>"
-    html += "<tr><td colspan='3' style='font-size:0.78rem; color:#64748b; padding:4px 6px;'>⚠️ Los ajustes definitivos del Anexo G requieren análisis punto a punto con el instructivo DGII.</td></tr>"
-
-    # Sección II — Determinación RNI
     html += "<tr><td colspan='3' class='header-seccion'>II. DETERMINACIÓN DE LA RENTA NETA IMPONIBLE</td></tr>"
     html += f"<tr><td class='col-num'>1</td><td class='col-desc'>Beneficio o Pérdida Neta antes del ISR (Casilla 1 IR-2)</td><td class='col-monto'>RD$ {utilidad_neta:,.2f}</td></tr>"
     html += f"<tr><td class='col-num'>7</td><td class='col-desc'>Renta Neta Imponible antes de pérdidas (Casillas 1 ± 6)</td><td class='col-monto'>RD$ {rni:,.2f}</td></tr>"
     html += f"<tr class='fila-total'><td class='col-num'>11</td><td class='col-desc'>Renta Neta Imponible Final (Base ISR)</td><td class='col-monto'>RD$ {rni:,.2f}</td></tr>"
-
-    # Sección III — Liquidación ISR
     html += "<tr><td colspan='3' class='header-seccion'>III. LIQUIDACIÓN DEL IMPUESTO SOBRE LA RENTA</td></tr>"
     html += f"<tr class='fila-total'><td class='col-num'>12</td><td class='col-desc'>Impuesto Liquidado (27% × Casilla 11)</td><td class='col-monto'>RD$ {isr_liquidado:,.2f}</td></tr>"
     html += f"<tr><td class='col-num'>13</td><td class='col-desc'>Anticipos Pagados (completar manualmente)</td><td class='col-monto' style='color:#64748b;'>RD$ 0.00</td></tr>"
     html += f"<tr><td class='col-num'>23</td><td class='col-desc'>Diferencia a Pagar (si positivo)</td><td class='col-monto'>RD$ {isr_liquidado:,.2f}</td></tr>"
-
-    # Sección Impuesto Activos
     html += "<tr><td colspan='3' class='header-seccion'>IV. LIQUIDACIÓN DEL IMPUESTO A LOS ACTIVOS (Formulario ACTIVO)</td></tr>"
     html += f"<tr><td class='col-num'>34</td><td class='col-desc'>Activos Imponibles (Total Activos)</td><td class='col-monto'>RD$ {activos_totales:,.2f}</td></tr>"
     html += f"<tr><td class='col-num'>39</td><td class='col-desc'>Impuesto a los Activos (1% × Casilla 38)</td><td class='col-monto'>RD$ {impuesto_activos:,.2f}</td></tr>"
     html += f"<tr><td class='col-num'>40</td><td class='col-desc'>Crédito ISR Liquidado (viene Casilla 12)</td><td class='col-monto' style='color:#dc2626;'>RD$ ({isr_liquidado:,.2f})</td></tr>"
     dif_activos = max(0, impuesto_activos - isr_liquidado)
     html += f"<tr><td class='col-num'>41</td><td class='col-desc'>Diferencia a Pagar Impuesto Activos (si positivo)</td><td class='col-monto'>RD$ {dif_activos:,.2f}</td></tr>"
-
-    # Resumen final
     html += "<tr><td colspan='3' class='header-seccion'>V. RESUMEN — MAYOR OBLIGACIÓN TRIBUTARIA</td></tr>"
     html += f"<tr class='fila-total' style='background-color:#1e3a5f; color:white;'><td class='col-num' style='background-color:#1e3a5f; color:white;'>★</td><td class='col-desc'>IMPUESTO MAYOR A PAGAR (Art. 314 CTRD: mayor entre ISR e Impuesto Activos)</td><td class='col-monto'>RD$ {impuesto_mayor:,.2f}</td></tr>"
     html += "</table>"
-    html += "<div class='alerta-box'>⚠️ <strong>Este borrador es estimativo.</strong> Los ajustes del Anexo G/D, pérdidas de años anteriores, créditos especiales (anticipos pagados, retenciones, etc.) deben completarse manualmente en la OFV de la DGII.</div>"
     return html
 
-# ──────────────────────────────────────────────────────────────────────────────
-# HTML IT-1 DETALLADO
-# ──────────────────────────────────────────────────────────────────────────────
 def html_it1_detallado(monto_607, itbis_607, monto_606, itbis_606, df_607, df_606, periodo):
     itbis_neto = itbis_607 - itbis_606
     proporcionalidad_pct = (itbis_607 / monto_607 * 100) if monto_607 > 0 else 0
 
     html = "<table class='tabla-ir2'>"
     html += f"<tr><th colspan='3'>PRELIQUIDACIÓN IT-1 — IMPUESTO A LAS TRANSFERENCIAS DE BIENES INDUSTRIALIZADOS Y SERVICIOS<br><span style='font-weight:normal;font-size:0.85rem;'>PERÍODO: {periodo}</span></th></tr>"
-
     html += "<tr><td colspan='3' class='header-seccion'>📊 SECCIÓN I — OPERACIONES DE VENTAS (Formato 607)</td></tr>"
     html += f"<tr><td class='col-num'>1.1</td><td class='col-desc'>Total Monto Facturado (Ventas)</td><td class='col-monto'>RD$ {monto_607:,.2f}</td></tr>"
     html += f"<tr><td class='col-num'>1.2</td><td class='col-desc'>ITBIS Facturado / Cobrado (18%)</td><td class='col-monto'>RD$ {itbis_607:,.2f}</td></tr>"
     html += f"<tr><td class='col-num'>1.3</td><td class='col-desc'>Tasa Efectiva ITBIS sobre ventas</td><td class='col-monto'>{proporcionalidad_pct:.2f}%</td></tr>"
-
     html += "<tr><td colspan='3' class='header-seccion'>🛒 SECCIÓN II — OPERACIONES DE COMPRAS (Formato 606)</td></tr>"
     html += f"<tr><td class='col-num'>2.1</td><td class='col-desc'>Total Monto Compras y Servicios</td><td class='col-monto'>RD$ {monto_606:,.2f}</td></tr>"
     html += f"<tr><td class='col-num'>2.2</td><td class='col-desc'>ITBIS Adelantado (por adelantar)</td><td class='col-monto'>RD$ {itbis_606:,.2f}</td></tr>"
-
     html += "<tr><td colspan='3' class='header-seccion'>⚖️ SECCIÓN III — DETERMINACIÓN ITBIS A PAGAR</td></tr>"
     html += f"<tr><td class='col-num'>3.1</td><td class='col-desc'>ITBIS Cobrado en Ventas</td><td class='col-monto'>RD$ {itbis_607:,.2f}</td></tr>"
     html += f"<tr><td class='col-num'>3.2</td><td class='col-desc'>(-) ITBIS Adelantado en Compras</td><td class='col-monto' style='color:#dc2626;'>RD$ ({itbis_606:,.2f})</td></tr>"
-    color = "#dc2626" if itbis_neto > 0 else "#166534"
     label = "ITBIS A PAGAR" if itbis_neto > 0 else "SALDO A FAVOR"
     html += f"<tr class='fila-total' style='background-color:#1e3a5f; color:white;'><td class='col-num' style='background-color:#1e3a5f;color:white;'>★</td><td class='col-desc'>{label}</td><td class='col-monto'>RD$ {abs(itbis_neto):,.2f}</td></tr>"
     html += "</table>"
-
-    # Alertas de cruce
+    
     if monto_607 > 0 and proporcionalidad_pct > 0 and abs(proporcionalidad_pct - 18) > 3:
         html += f"<div class='alerta-box'>⚠️ La tasa efectiva de ITBIS sobre ventas ({proporcionalidad_pct:.1f}%) difiere significativamente del 18%. Verificar operaciones exentas o gravadas a tasa reducida declaradas en el 607.</div>"
     if itbis_neto < 0:
@@ -1049,7 +1020,6 @@ if not uploaded and not file_606 and not file_607 and not file_tss:
     """, unsafe_allow_html=True)
     st.stop()
 
-# Procesamiento principal
 df_bal  = pd.DataFrame()
 df_comp = pd.DataFrame()
 
@@ -1067,14 +1037,12 @@ if uploaded:
                 df_comp['saldo_final_Y1'] = 0.0
                 df_comp['variacion_abs']  = df_comp['saldo_final_Y2']
 
-# KPIs
 t_ingresos = abs(df_bal[df_bal['codigo'].str.startswith('4', na=False)]['saldo_final'].sum()) if not df_bal.empty else 0
 t_activos  = abs(df_bal[df_bal['codigo'].str.startswith('1', na=False)]['saldo_final'].sum()) if not df_bal.empty else 0
 t_costos   = abs(df_bal[df_bal['codigo'].str.startswith('5', na=False)]['saldo_final'].sum()) if not df_bal.empty else 0
 t_gastos   = abs(df_bal[df_bal['codigo'].str.startswith('6', na=False)]['saldo_final'].sum()) if not df_bal.empty else 0
 utilidad_neta = t_ingresos - t_costos - t_gastos
 
-# Módulos independientes (no requieren balanza)
 monto_606, itbis_606, df_606_det = procesar_606_607(file_606, "606") if file_606 else (0, 0, pd.DataFrame())
 monto_607, itbis_607, df_607_det = procesar_606_607(file_607, "607") if file_607 else (0, 0, pd.DataFrame())
 df_tss, tss_res = procesar_tss(file_tss) if file_tss else (None, None)
@@ -1089,7 +1057,6 @@ tab_comp, tab_bg, tab_er, tab_pat, tab_efe, tab_bal, tab_inconsist, tab_art287, 
 ])
 
 try:
-    # ── DASHBOARD ──────────────────────────────────────────────────────────────
     with tab_comp:
         if not df_comp.empty:
             c1, c2, c3, c4 = st.columns(4)
@@ -1113,7 +1080,6 @@ try:
         else:
             st.info("Carga la balanza de comprobación para ver el Dashboard.")
 
-    # ── BALANCE GENERAL ─────────────────────────────────────────────────────────
     with tab_bg:
         if not df_comp.empty:
             c1, c2 = st.columns([3, 1])
@@ -1127,7 +1093,6 @@ try:
         else:
             st.info("Carga la balanza para generar el Balance General.")
 
-    # ── ESTADO DE RESULTADOS ────────────────────────────────────────────────────
     with tab_er:
         if not df_comp.empty:
             c1, c2 = st.columns([3, 1])
@@ -1138,7 +1103,6 @@ try:
         else:
             st.info("Carga la balanza para generar el Estado de Resultados.")
 
-    # ── PATRIMONIO ──────────────────────────────────────────────────────────────
     with tab_pat:
         if not df_comp.empty:
             st.markdown(html_cambios_patrimonio(df_comp, anio), unsafe_allow_html=True)
@@ -1147,7 +1111,6 @@ try:
         else:
             st.info("Carga la balanza para generar el Estado de Cambios en el Patrimonio.")
 
-    # ── FLUJO DE EFECTIVO ───────────────────────────────────────────────────────
     with tab_efe:
         if not df_comp.empty:
             st.markdown(html_flujo_hoja_trabajo(df_comp, anio), unsafe_allow_html=True)
@@ -1155,7 +1118,6 @@ try:
         else:
             st.info("Carga la balanza para generar el Flujo de Efectivo.")
 
-    # ── BALANZA ─────────────────────────────────────────────────────────────────
     with tab_bal:
         if not df_bal.empty:
             st.dataframe(df_bal[['codigo','cuenta','saldo_final']], use_container_width=True)
@@ -1163,7 +1125,6 @@ try:
         else:
             st.info("Carga la balanza de comprobación.")
 
-    # ── INCONSISTENCIAS ─────────────────────────────────────────────────────────
     with tab_inconsist:
         if not df_bal.empty:
             df_show_inc = df_bal[~df_bal['validacion_naturaleza'].str.startswith('✅')][['codigo','cuenta','saldo_final','validacion_naturaleza']]
@@ -1176,7 +1137,6 @@ try:
         else:
             st.info("Carga la balanza para buscar inconsistencias.")
 
-    # ── RIESGOS ART.287 ─────────────────────────────────────────────────────────
     with tab_art287:
         if not df_bal.empty:
             df_show_art = df_bal[df_bal['alerta_fiscal'] != ""][['codigo','cuenta','saldo_final','alerta_fiscal']]
@@ -1189,12 +1149,10 @@ try:
         else:
             st.info("Carga la balanza para validar riesgos del Art. 287.")
 
-    # ── BORRADOR IR-2 ───────────────────────────────────────────────────────────
     with tab_ir2:
         if not df_bal.empty:
             st.markdown(html_borrador_ir2(df_bal, periodo), unsafe_allow_html=True)
             st.markdown("---")
-            # Exportar IR-2 como Excel
             isr_est = max(0, utilidad_neta) * 0.27
             df_ir2_export = pd.DataFrame([
                 ("PERÍODO FISCAL", periodo),
@@ -1212,7 +1170,6 @@ try:
         else:
             st.info("Carga la balanza para generar el borrador del IR-2.")
 
-    # ── IT-1 ITBIS ──────────────────────────────────────────────────────────────
     with tab_it1:
         st.markdown("### 🧾 Preliquidación IT-1 — ITBIS")
         if not file_606 and not file_607:
@@ -1223,31 +1180,26 @@ try:
             </div>
             """, unsafe_allow_html=True)
         else:
-            # Métricas rápidas
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Ventas (607)", f"RD$ {monto_607:,.0f}")
             c2.metric("ITBIS Cobrado", f"RD$ {itbis_607:,.0f}")
             c3.metric("Compras (606)", f"RD$ {monto_606:,.0f}")
             c4.metric("ITBIS Adelantado", f"RD$ {itbis_606:,.0f}")
             st.markdown("---")
-            # Tabla detallada
             st.markdown(html_it1_detallado(monto_607, itbis_607, monto_606, itbis_606, df_607_det, df_606_det, periodo), unsafe_allow_html=True)
             st.markdown("---")
-            # Detalle por registros
             if not df_607_det.empty:
                 with st.expander("📋 Ver registros del Formato 607 (Ventas)"):
                     st.dataframe(df_607_det, use_container_width=True)
             if not df_606_det.empty:
                 with st.expander("🛒 Ver registros del Formato 606 (Compras)"):
                     st.dataframe(df_606_det, use_container_width=True)
-            # Descarga
             it1_bytes = exportar_it1_excel(empresa, periodo, monto_607, itbis_607, monto_606, itbis_606, df_607_det, df_606_det)
             st.download_button("📥 Descargar Preliquidación IT-1 (Excel)", data=it1_bytes, file_name=f"PreliquidacionIT1_{empresa.replace(' ','_')}_{periodo.replace(' ','_')}.xlsx")
 
-    # ── TSS NÓMINA ──────────────────────────────────────────────────────────────
     with tab_tss_tab:
         st.markdown("### 👥 Auditoría de Nómina y TSS")
-        st.download_button("📥 Descargar Plantilla Vacía TSS", data=generar_plantilla_tss(), file_name="Plantilla_TSS_Vacia.xlsx")
+        st.download_button("📥 Descargar Plantilla Vacía Autodeterminación", data=generar_plantilla_tss(), file_name="Plantilla_TSS_Vacia.xlsx")
         st.markdown("""
         <div class='info-box'>
         Este módulo funciona de forma <strong>completamente independiente</strong> de la balanza.<br>
@@ -1261,7 +1213,6 @@ try:
             c3.metric("Aportes Patronales", f"RD$ {tss_res['total_patronal']:,.2f}")
             c4.metric("Retenciones Empleados", f"RD$ {tss_res['total_empleado']:,.2f}")
             st.markdown("---")
-            # Desglose de tasas
             with st.expander("📊 Ver desglose de tasas aplicadas"):
                 st.markdown(f"""
                 | Concepto | Tasa | Base |
@@ -1274,7 +1225,6 @@ try:
                 | AFP Empleado | {TASA_AFP_EMP*100:.2f}% | Techo RD$ {TECHO_AFP:,.2f} |
                 """)
             st.markdown(f"**Total mensual a remitir TSS:** `RD$ {tss_res['total_pagar']:,.2f}`")
-            # Verificar cruce con contabilidad
             if not df_bal.empty:
                 gastos_personal_bal = abs(df_bal[df_bal['cuenta'].str.lower().str.contains('tss|seguridad social|aporte pat', na=False)]['saldo_final'].sum())
                 if gastos_personal_bal > 0:
@@ -1289,7 +1239,6 @@ try:
         elif file_tss:
             st.error("No se pudo procesar el archivo TSS. Verifica que tenga la columna 'Salario Ordinario' o 'Sueldo'.")
 
-    # ── CONSOLIDADO FISCAL ──────────────────────────────────────────────────────
     with tab_consol:
         st.markdown("### 🏛️ Resumen Fiscal Consolidado")
         isr_est = max(0, utilidad_neta) * 0.27
@@ -1298,7 +1247,6 @@ try:
         estado_it1 = "✅ Calculado (606/607)" if (file_606 or file_607) else "⚠️ Falta 606/607"
         estado_tss = "✅ Calculado (Plantilla)" if file_tss else "⚠️ Falta Plantilla TSS"
 
-        # Resumen de totales
         c1, c2, c3 = st.columns(3)
         c1.metric("ISR Estimado (IR-2)", f"RD$ {isr_est:,.0f}", help="27% sobre Renta Neta Imponible")
         c2.metric("ITBIS Neto (IT-1)", f"RD$ {(itbis_607-itbis_606):,.0f}", delta=f"{'Pagar' if itbis_607>itbis_606 else 'A favor'}")
@@ -1329,5 +1277,3 @@ try:
 
 except Exception as e:
     st.error(f"Error al renderizar la interfaz: {e}")
-    import traceback
-    st.code(traceback.format_exc())
