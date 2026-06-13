@@ -189,4 +189,4 @@ def calcular_casillas_ir2(df: pd.DataFrame) -> dict:
     inventario = suma(['13', '130', '131', '132', '133'])
     af1 = suma(['152', '153']); af2 = suma(['154', '155']); af3 = suma(['156', '157', '158'])
     otros_act = suma(['14', '16', '17', '18', '19'])
-    saldo_act_fiscal = af1 + af2 + af3 +
+    saldo_act_fiscal = af1 + af2 + af3 + inventario + otros_act
