@@ -190,7 +190,6 @@ def procesar_tss(file):
         df = df.iloc[h_idx + 1:].reset_index(drop=True)
         
         col_salario = next((c for c in df.columns if 'salario ordinario' in c or 'sueldo' in c), None)
-        col_cedula = next((c for c in df.columns if 'cédula' in c or 'cedula' in c), None)
         
         if not col_salario: return None, 0
         
@@ -220,7 +219,14 @@ def generar_plantilla_tss():
         "Fecha de Nacimiento", "Salario Ordinario", "Otras Remuneraciones", "Aporte Voluntario"
     ])
     buf = io.BytesIO()
-    df.to_excel(buf, index=False, engine='openpyxl')
+    with pd.ExcelWriter(buf, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False)
+    return buf.getvalue()
+
+def generar_excel_descargable(df):
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Datos Exportados')
     return buf.getvalue()
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -479,6 +485,30 @@ def exportar_reporte_corporativo(empresa, periodo, anio_act, df_comp):
         format_row(ws_er, r, 'tot'); r += 1
 
         # ─────────────────────────────────────────────────────────────────────
+        # ESTADO DE CAMBIOS EN EL PATRIMONIO
+        # ─────────────────────────────────────────────────────────────────────
+        ws_pat = wb.create_sheet("Patrimonio")
+        r = create_sheet_header(ws_pat, "ESTADO DE CAMBIOS EN EL PATRIMONIO")
+        
+        ws_pat.cell(row=r, column=1, value="Saldos y Movimientos del Período:"); format_row(ws_pat, r, 'sec'); r += 1
+        for _, row in df_comp[df_comp['codigo'].str.startswith('3', na=False)].iterrows():
+            v2, v1 = abs(row['saldo_final_Y2']), abs(row['saldo_final_Y1'])
+            if v2 == 0 and v1 == 0: continue
+            ws_pat.cell(row=r, column=1, value=row['cuenta'].title())
+            ws_pat.cell(row=r, column=3, value=v2); ws_pat.cell(row=r, column=4, value=v1)
+            c_abs = ws_pat.cell(row=r, column=5, value=v2 - v1)
+            c_pct = ws_pat.cell(row=r, column=6, value=_pct(v2, v1)); c_pct.number_format = FMT_PCT
+            color_deviation(c_abs, c_pct, v2, v1)
+            format_row(ws_pat, r, 'normal'); r += 1
+            
+        ws_pat.cell(row=r, column=1, value="TOTAL PATRIMONIO")
+        ws_pat.cell(row=r, column=3, value=pat_y2); ws_pat.cell(row=r, column=4, value=pat_y1)
+        c_abs = ws_pat.cell(row=r, column=5, value=pat_y2 - pat_y1)
+        c_pct = ws_pat.cell(row=r, column=6, value=_pct(pat_y2, pat_y1)); c_pct.number_format = FMT_PCT
+        color_deviation(c_abs, c_pct, pat_y2, pat_y1)
+        format_row(ws_pat, r, 'tot')
+
+        # ─────────────────────────────────────────────────────────────────────
         # 3. FLUJO DE EFECTIVO
         # ─────────────────────────────────────────────────────────────────────
         ws_fe = wb.create_sheet("Flujo de Efectivo")
@@ -603,13 +633,23 @@ def exportar_reporte_corporativo(empresa, periodo, anio_act, df_comp):
         buf = io.BytesIO(); wb.save(buf)
         return buf.getvalue()
     except Exception as e:
-        st.error(f"Error generando Excel: {e}")
-        import traceback; st.error(traceback.format_exc())
+        st.error(f"Error generando Excel Corporativo: {e}")
         return None
 
 # ──────────────────────────────────────────────────────────────────────────────
 # GENERADORES DE TABLAS HTML
 # ──────────────────────────────────────────────────────────────────────────────
+def html_cambios_patrimonio(df_comp, anio):
+    html = f"<table class='tabla-contable'><tr><th>Cuentas de Patrimonio</th><th>Saldo Inicial {int(anio)-1}</th><th>Variación</th><th>Saldo Final {anio}</th></tr>"
+    pat_y2, pat_y1 = 0, 0
+    for _, r in df_comp[df_comp['codigo'].str.startswith('3', na=False)].iterrows():
+        v2, v1 = abs(r['saldo_final_Y2']), abs(r['saldo_final_Y1'])
+        if v2 == 0 and v1 == 0: continue
+        pat_y2 += v2; pat_y1 += v1
+        html += f"<tr><td>{r['cuenta'].title()}</td><td>{fmt_c(v1)}</td><td>{fmt_c(v2 - v1)}</td><td>{fmt_c(v2)}</td></tr>"
+    html += f"<tr class='total'><td>TOTAL PATRIMONIO</td><td>{fmt_c(pat_y1)}</td><td>{fmt_c(pat_y2 - pat_y1)}</td><td>{fmt_c(pat_y2)}</td></tr></table>"
+    return html
+
 def html_estado_resultados(df_comp, anio):
     html = f"<table class='tabla-contable'><tr><th>Conceptos</th><th>Nota</th><th>{anio}</th><th>{int(anio)-1}</th></tr>"
     html += "<tr><td class='seccion' colspan='4'>Ingresos operacionales:</td></tr>"
@@ -703,56 +743,6 @@ def html_flujo_hoja_trabajo(df_comp, anio):
         if v2 != 0 or v1 != 0: html += f"<tr><td>{r['cuenta'].title()}</td><td>{fmt_c(v2)}</td><td>{fmt_c(v1)}</td></tr>"
     return html + "</table>"
 
-def html_nota_ppe_completa(df_comp, anio_actual):
-    cats = ['Terrenos y edificaciones', 'Instalaciones', 'Equipos industriales', 'Mobiliarios y equipos', 'Otros activos y mejoras', 'Construcción en proceso']
-    data = {c: {'c_y0':0, 'c_y1':0, 'c_y2':0, 'd_y0':0, 'd_y1':0, 'd_y2':0} for c in cats}
-    
-    for _, r in df_comp[df_comp['codigo'].str.startswith('1', na=False)].iterrows():
-        if es_activo_no_corriente(r['codigo'], r['cuenta']):
-            n = str(r['cuenta']).lower()
-            if any(x in n for x in ['terreno', 'edific']): c = 'Terrenos y edificaciones'
-            elif 'instalacion' in n: c = 'Instalaciones'
-            elif any(x in n for x in ['maquinaria', 'transporte', 'vehiculo', 'industrial']): c = 'Equipos industriales'
-            elif any(x in n for x in ['proceso', 'transito']): c = 'Construcción en proceso'
-            elif 'otro' in n or 'mejora' in n: c = 'Otros activos y mejoras'
-            else: c = 'Mobiliarios y equipos'
-            
-            y1, y2 = abs(r['saldo_final_Y1']), abs(r['saldo_final_Y2'])
-            if 'acum' in n: 
-                data[c]['d_y1'] += y1; data[c]['d_y2'] += y2; data[c]['d_y0'] += (y1 * 0.8)
-            else: 
-                data[c]['c_y1'] += y1; data[c]['c_y2'] += y2; data[c]['c_y0'] += (y1 * 0.8)
-
-    def bloque(titulo, k_ini, k_fin, d_ini, d_fin):
-        h = f"<tr><td colspan='8' class='titulo-anio'>{titulo}</td></tr><tr><th></th>"
-        for c in cats: h += f"<th style='text-align: right; width: 14%;'>{c}</th>"
-        h += "<th style='text-align: right; width: 14%;'>Total</th></tr>"
-        
-        def fila(lbl, vals, mult=1, sub=False, tot=False):
-            cls = "total" if tot else ("subtotal" if sub else "")
-            r = f"<tr class='{cls}'><td>{lbl}</td>"
-            s = 0
-            for v in vals: r += f"<td>{fmt_c(v * mult)}</td>"; s += (v * mult)
-            return r + f"<td>{fmt_c(s)}</td></tr>"
-            
-        h += "<tr><td class='seccion' colspan='8'>Costos:</td></tr>"
-        c_i = [data[c][k_ini] for c in cats]; c_f = [data[c][k_fin] for c in cats]
-        h += fila("Balance al inicio", c_i)
-        h += fila("Adiciones", [max(0, f - i) for f, i in zip(c_f, c_i)])
-        h += fila("Retiros", [min(0, f - i) for f, i in zip(c_f, c_i)])
-        h += fila("Balance al costo final", c_f, sub=True)
-        
-        h += "<tr><td class='seccion' colspan='8'>Depreciación:</td></tr>"
-        d_i = [data[c][d_ini] for c in cats]; d_f = [data[c][d_fin] for c in cats]
-        h += fila("Balance al inicio", d_i, -1)
-        h += fila("Gasto de depreciación", [max(0, f - i) for f, i in zip(d_f, d_i)], -1)
-        h += fila("Retiros", [min(0, f - i) for f, i in zip(d_f, d_i)], -1)
-        h += fila("Dep. Acumulada final", d_f, -1, sub=True)
-        h += fila("Balance neto al final", [cf - df for cf, df in zip(c_f, d_f)], tot=True)
-        return h
-
-    return "<table class='tabla-contable'>" + bloque(anio_actual, 'c_y1', 'c_y2', 'd_y1', 'd_y2') + bloque(int(anio_actual)-1, 'c_y0', 'c_y1', 'd_y0', 'd_y1') + "</table>"
-
 def html_borrador_ir2(df_bal, periodo):
     ingresos = abs(df_bal[df_bal['codigo'].str.startswith('4', na=False)]['saldo_final'].sum())
     costos = abs(df_bal[df_bal['codigo'].str.startswith('5', na=False)]['saldo_final'].sum())
@@ -844,8 +834,8 @@ df_tss, tss_res = procesar_tss(file_tss) if file_tss else (None, None)
 
 st.markdown(f"### 📌 {empresa} — {periodo}")
 
-tab_comp, tab_bg, tab_er, tab_efe, tab_ppe, tab_bal, tab_inconsist, tab_art287, tab_ir2, tab_it1, tab_tss, tab_consol = st.tabs([
-    "📈 Dashboard", "📊 Balance General", "📉 Estado de Resultados", "🌊 Flujo de Efectivo", "🏗️ Anexo Activos Fijos",
+tab_comp, tab_bg, tab_er, tab_pat, tab_efe, tab_bal, tab_inconsist, tab_art287, tab_ir2, tab_it1, tab_tss, tab_consol = st.tabs([
+    "📈 Dashboard", "📊 Balance General", "📉 Estado de Resultados", "💼 Cambios Patrimonio", "🌊 Flujo de Efectivo",
     "📋 Balanza Creada", "🚨 Inconsistencias", "⚖️ Riesgos Art.287", 
     "📝 Borrador IR-2", "🧾 Borrador IT-1", "👥 Auditoría TSS", "🏛️ Consolidado Fiscal"
 ])
@@ -857,7 +847,7 @@ try:
             st.metric("Ingresos Año Actual", f"RD$ {t_ingresos:,.0f}")
         with c2:
             excel_bytes = exportar_reporte_corporativo(empresa, periodo, anio, df_comp)
-            if excel_bytes: st.download_button("📥 Descargar Excel Corporativo", data=excel_bytes, file_name=f"Reporte_{empresa.replace(' ','_')}.xlsx")
+            if excel_bytes: st.download_button("📥 Descargar Reporte Financiero Completo (Excel)", data=excel_bytes, file_name=f"Reporte_{empresa.replace(' ','_')}.xlsx")
         df_chart = pd.DataFrame({'Año': [f"{int(anio)-1}", f"{anio}"], 'Ingresos': [sum(abs(df_comp[df_comp['codigo'].str.startswith('4', na=False)]['saldo_final_Y1'])), t_ingresos], 'Activos': [sum(abs(df_comp[df_comp['codigo'].str.startswith('1', na=False)]['saldo_final_Y1'])), t_activos]})
         st.plotly_chart(px.bar(df_chart, x='Año', y=['Ingresos', 'Activos'], barmode='group'), use_container_width=True)
 
@@ -867,11 +857,28 @@ try:
         with c2: st.markdown(html_balance_general(df_comp, anio, 'pasivo'), unsafe_allow_html=True)
         
     with tab_er: st.markdown(html_estado_resultados(df_comp, anio), unsafe_allow_html=True)
+    
+    with tab_pat: st.markdown(html_cambios_patrimonio(df_comp, anio), unsafe_allow_html=True)
+    
     with tab_efe: st.markdown(html_flujo_hoja_trabajo(df_comp, anio), unsafe_allow_html=True)
-    with tab_ppe: st.markdown(html_nota_ppe_completa(df_comp, anio), unsafe_allow_html=True)
-    with tab_bal: st.dataframe(df_bal[['codigo', 'cuenta', 'saldo_final']], use_container_width=True)
-    with tab_inconsist: st.dataframe(df_bal[~df_bal['validacion_naturaleza'].str.startswith('✅')][['codigo', 'cuenta', 'saldo_final', 'validacion_naturaleza']], use_container_width=True)
-    with tab_art287: st.dataframe(df_bal[df_bal['alerta_fiscal'] != ""][['codigo', 'cuenta', 'saldo_final', 'alerta_fiscal']], use_container_width=True)
+    
+    with tab_bal: 
+        df_show_bal = df_bal[['codigo', 'cuenta', 'saldo_final']]
+        st.dataframe(df_show_bal, use_container_width=True)
+        st.download_button("📥 Descargar Tabla (Excel)", data=generar_excel_descargable(df_show_bal), file_name="Balanza_Auditoria.xlsx")
+        
+    with tab_inconsist: 
+        df_show_inc = df_bal[~df_bal['validacion_naturaleza'].str.startswith('✅')][['codigo', 'cuenta', 'saldo_final', 'validacion_naturaleza']]
+        st.dataframe(df_show_inc, use_container_width=True)
+        if not df_show_inc.empty: st.download_button("📥 Descargar Tabla (Excel)", data=generar_excel_descargable(df_show_inc), file_name="Inconsistencias.xlsx", key="btn_inc")
+        else: st.success("✅ Sin inconsistencias.")
+        
+    with tab_art287: 
+        df_show_art = df_bal[df_bal['alerta_fiscal'] != ""][['codigo', 'cuenta', 'saldo_final', 'alerta_fiscal']]
+        st.dataframe(df_show_art, use_container_width=True)
+        if not df_show_art.empty: st.download_button("📥 Descargar Tabla (Excel)", data=generar_excel_descargable(df_show_art), file_name="Riesgos_Art287.xlsx", key="btn_art")
+        else: st.success("✅ Sin alertas.")
+        
     with tab_ir2: st.markdown(html_borrador_ir2(df_bal, periodo), unsafe_allow_html=True)
 
     with tab_it1:
@@ -896,6 +903,7 @@ try:
             c2.metric("Aportes Patronales Estimados", f"RD$ {(tss_res['sfs_pat'] + tss_res['afp_pat'] + tss_res['srl_pat'] + tss_res['infotep']):,.2f}")
             c2.metric("Retenciones Empleados", f"RD$ {(tss_res['sfs_emp'] + tss_res['afp_emp']):,.2f}")
             st.dataframe(df_tss, use_container_width=True)
+            st.download_button("📥 Descargar Tabla TSS (Excel)", data=generar_excel_descargable(df_tss), file_name="Auditoria_TSS.xlsx")
         else:
             st.info("Sube la plantilla de Autodeterminación TSS para auditar el cálculo de retenciones y aportes.")
 
@@ -908,6 +916,7 @@ try:
             ("IR-2", "Impuesto Renta Estimado", f"RD$ {isr_est:,.2f}", "Base Balanza"),
         ], columns=["Formulario", "Concepto", "Monto Estimado", "Estado"])
         st.dataframe(df_consol, use_container_width=True, hide_index=True)
+        st.download_button("📥 Descargar Consolidado (Excel)", data=generar_excel_descargable(df_consol), file_name="Consolidado_Fiscal.xlsx")
 
 except Exception as e:
     st.error(f"Error al renderizar: {e}")
